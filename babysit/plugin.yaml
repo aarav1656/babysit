@@ -1,0 +1,13 @@
+manifest_version: 2
+name: babysit
+version: "0.1.0"
+requires_hermes: ">=0.23.0"
+description: Monitor job logs and wake the active Hermes session on important events.
+author: kamalbuilds
+license: MIT
+provides_tools:
+  - babysit_watch
+  - babysit_stop
+  - babysit_list
+provides_commands:
+  - babysit
