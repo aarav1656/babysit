@@ -9,5 +9,5 @@ provides_tools:
   - babysit_watch
   - babysit_stop
   - babysit_list
-provides_commands:
-  - babysit
+provides_hooks:
+  - on_session_finalize

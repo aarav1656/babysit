@@ -1,6 +1,6 @@
+import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -94,18 +94,30 @@ class EditThrottle:
         return True
 
 
-def tail_lines(path, offset: int) -> tuple[list[str], int]:
-    with Path(path).open("rb") as log:
-        log.seek(0, 2)
-        size = log.tell()
-        if size < offset:
-            offset = 0
-        log.seek(offset)
-        data = log.read()
+def tail_fd(fd: int, offset: int, max_bytes: int = 1 << 20) -> tuple[list[str], int]:
+    """New complete lines from an open log fd, at most ``max_bytes`` per call.
 
+    Reads through the descriptor, never a path, so what was validated at open is what is read.
+    Only one thread may read a given fd (it seeks)."""
+    size = os.fstat(fd).st_size
+    if size < offset:
+        offset = 0
+    os.lseek(fd, offset, os.SEEK_SET)
+    data = os.read(fd, min(size - offset, max_bytes))
     last_newline = data.rfind(b"\n")
-    if last_newline < 0:
+    if last_newline >= 0:
+        complete = data[: last_newline + 1]
+    elif len(data) == max_bytes:
+        complete = data  # one line longer than the cap: take it rather than stall forever
+    else:
         return [], offset
-    complete = data[: last_newline + 1]
-    lines = [line.decode("utf-8").removesuffix("\r") for line in complete.splitlines()]
+    lines = [line.decode("utf-8", "replace").removesuffix("\r") for line in complete.splitlines()]
     return lines, offset + len(complete)
+
+
+def tail_lines(path, offset: int) -> tuple[list[str], int]:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        return tail_fd(fd, offset)
+    finally:
+        os.close(fd)

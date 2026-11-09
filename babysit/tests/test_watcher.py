@@ -1,8 +1,9 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from babysit.watcher import EditThrottle, Event, JobWatch, tail_lines
+from babysit.watcher import EditThrottle, Event, JobWatch, tail_fd, tail_lines
 
 
 class JobWatchTests(unittest.TestCase):
@@ -115,6 +116,61 @@ class TailLinesTests(unittest.TestCase):
             path = Path(directory) / "job.log"
             path.write_bytes(b"\r\nline\r\n")
             self.assertEqual(tail_lines(path, 0), (["", "line"], len(b"\r\nline\r\n")))
+
+    def test_invalid_utf8_is_replaced_not_raised(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "job.log"
+            path.write_bytes(b"ok\n\xff\xfe bad\nloss: nan\n")
+            lines, offset = tail_lines(path, 0)
+            self.assertEqual(lines, ["ok", "\ufffd\ufffd bad", "loss: nan"])
+            self.assertEqual(offset, path.stat().st_size)
+
+    def test_read_is_capped_per_call_and_resumes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "job.log"
+            path.write_bytes(b"aaaa\nbbbb\ncccc\ndddd\n")
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                first, offset = tail_fd(fd, 0, max_bytes=12)
+                self.assertEqual((first, offset), (["aaaa", "bbbb"], 10))
+                seen = first
+                for _ in range(10):
+                    lines, offset = tail_fd(fd, offset, max_bytes=12)
+                    seen += lines
+                self.assertEqual(seen, ["aaaa", "bbbb", "cccc", "dddd"])
+                self.assertEqual(offset, path.stat().st_size)
+            finally:
+                os.close(fd)
+
+    def test_line_longer_than_the_cap_does_not_stall(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "job.log"
+            path.write_bytes(b"x" * 20 + b"\nnext\n")
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                lines, offset = tail_fd(fd, 0, max_bytes=8)
+                self.assertEqual((lines, offset), (["x" * 8], 8))
+                seen = []
+                for _ in range(10):
+                    lines, offset = tail_fd(fd, offset, max_bytes=8)
+                    seen += lines
+                self.assertEqual(seen[-1], "next")
+                self.assertEqual(offset, path.stat().st_size)
+            finally:
+                os.close(fd)
+
+    def test_reads_the_open_file_not_the_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "job.log"
+            other = Path(directory) / "other.log"
+            path.write_bytes(b"original\n")
+            other.write_bytes(b"replacement\n")
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                os.replace(other, path)
+                self.assertEqual(tail_fd(fd, 0), (["original"], 9))
+            finally:
+                os.close(fd)
 
 
 if __name__ == "__main__":
