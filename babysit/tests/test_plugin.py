@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from babysit import _WATCHES, _list, _stop, _watch
+from babysit import _WATCHES, _list, _safe_log_path, _stop, _watch
 
 
 class Handle:
@@ -122,6 +122,15 @@ class PluginTests(unittest.TestCase):
         result = json.loads(_watch({"log_path": "/etc/passwd"}, ctx=self.ctx))
         self.assertFalse(result["ok"])
         self.assertEqual(self.ctx.posts, [])
+
+    def test_refuses_active_profile_home(self):
+        profile_home = Path(self.temp.name) / "active-profile"
+        profile_home.mkdir()
+        protected_log = profile_home / "private.log"
+        protected_log.write_text("secret")
+        with patch("hermes_constants.get_hermes_home", return_value=profile_home):
+            with self.assertRaisesRegex(ValueError, "protected directory"):
+                _safe_log_path(str(protected_log))
 
 
 if __name__ == "__main__":

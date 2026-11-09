@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import logging
 import os
 import re
 import threading
@@ -19,6 +20,7 @@ _MAX_WATCHES = 8
 _LOCK = threading.RLock()
 _STARTING = 0
 _WATCHES: dict[str, dict] = {}
+_LOGGER = logging.getLogger(__name__)
 
 
 def _safe_log_path(value: str) -> Path:
@@ -26,7 +28,9 @@ def _safe_log_path(value: str) -> Path:
     if not path.is_file():
         raise ValueError("log_path must be an existing regular file")
     protected = [Path("/etc").resolve(), (Path.home() / ".ssh").resolve()]
-    hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")).expanduser().resolve()
+    from hermes_constants import get_hermes_home
+
+    hermes_home = Path(get_hermes_home()).expanduser().resolve()
     protected.append(hermes_home)
     if any(path == root or root in path.parents for root in protected):
         raise ValueError("log_path is inside a protected directory")
@@ -87,8 +91,8 @@ def _watch_loop(watch_id: str, state: dict) -> None:
 def _quiet_edit(handle, text: str) -> None:
     try:
         handle.edit(text)
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.debug("Babysit message edit failed (%s)", type(exc).__name__)
 
 
 def _handle_event(state: dict, kind: str, line: str, now: float, throttle) -> None:
@@ -99,13 +103,14 @@ def _handle_event(state: dict, kind: str, line: str, now: float, throttle) -> No
     message = f"[babysit] {kind} in {state['name']}: {line}".rstrip()
     try:
         accepted = state["ctx"].inject_message(message, session_key=state["session_key"])
-    except Exception:
+    except Exception as exc:
+        _LOGGER.debug("Babysit session injection failed (%s)", type(exc).__name__)
         accepted = False
     if not accepted:
         try:
             state["route_context"].run(state["ctx"].post_message, message)
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.debug("Babysit context post failed (%s)", type(exc).__name__)
 
 
 def _watch(args: dict, *, ctx) -> str:
