@@ -13,6 +13,8 @@ import time
 import uuid
 from pathlib import Path
 
+import psutil
+
 from . import watcher
 
 _POLL_SECONDS = 2.0
@@ -132,13 +134,25 @@ def _status(name: str, state: dict, elapsed: float) -> str:
     return f"{name}: {last}\nElapsed: {elapsed:.0f}s | Lines seen: {state['lines']}"
 
 
-def _process_alive(pid: int) -> bool:
+def _track(pid: int | None):
+    """The process to watch, or None when there is no such process (it then counts as ended)."""
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
+        return None if pid is None else psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return None
+
+
+def _process_alive(proc) -> bool:
+    """False once the process exited, was left a zombie, or its PID went to another process.
+
+    psutil rather than ``os.kill(pid, 0)``: on Windows that signal is Ctrl+C for the target's console."""
+    if proc is None:
         return False
-    except PermissionError:
+    try:
+        return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.AccessDenied:
         return True
 
 
@@ -164,7 +178,7 @@ def _watch_loop(watch_id: str, state: dict) -> None:
                     _handle_event(state, event.kind, event.line, now)
             for event in state["job"].tick(now):
                 _handle_event(state, event.kind, event.line, now)
-            ended = state["pid"] is not None and not _process_alive(state["pid"])
+            ended = state["pid"] is not None and not _process_alive(state["proc"])
             if ended:
                 _handle_event(state, "process ended", state["last_line"], now)
                 break
@@ -279,7 +293,7 @@ def _watch(args: dict, *, ctx) -> str:
         throttle.should_edit(first, started)
         watch_id = uuid.uuid4().hex[:12]
         state = {
-            "ctx": ctx, "fd": fd, "pid": pid, "name": name, "watch_id": watch_id, "path": _clean(str(path), 500),
+            "ctx": ctx, "fd": fd, "pid": pid, "proc": _track(pid), "name": name, "watch_id": watch_id, "path": _clean(str(path), 500),
             "handle": handle if handle.ok else None, "live_status": _live_status(ctx),
             "session_key": session_key, "session_id": session_id,
             "route_context": contextvars.copy_context(),
