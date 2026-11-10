@@ -69,5 +69,5 @@ Babysit reads the selected log file through one read-only handle, opened without
 Run from the repository root with the Python environment Hermes runs in:
 
 ```sh
-python -m unittest discover -s babysit/tests -t .
+python -m unittest discover -s tests -t .
 ```

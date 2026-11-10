@@ -9,7 +9,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-PLUGIN_DIR = Path(__file__).resolve().parents[1]
+PLUGIN_DIR = Path(__file__).resolve().parents[1] / "babysit"
 
 # Runs in a child interpreter so Hermes' loader, registry and session context are the real ones and
 # none of the stubs the other test modules install are present.
@@ -60,7 +60,7 @@ class HermesLoaderTests(unittest.TestCase):
     def test_real_loader_registry_dispatch_and_session_finalize(self):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as jobs:
             shutil.copytree(PLUGIN_DIR, Path(home) / "plugins" / "babysit",
-                            ignore=shutil.ignore_patterns("__pycache__", "tests"))
+                            ignore=shutil.ignore_patterns("__pycache__"))
             (Path(home) / "config.yaml").write_text("plugins:\n  enabled:\n    - babysit\n")
             log = Path(jobs).resolve() / "train.log"
             log.write_text("")
