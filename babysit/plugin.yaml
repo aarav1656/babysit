@@ -1,6 +1,6 @@
 manifest_version: 2
 name: babysit
-version: "0.1.0"
+version: "0.2.0"
 requires_hermes: ">=0.23.0"
 description: Monitor job logs and wake the active Hermes session on important events.
 author: aarav1656

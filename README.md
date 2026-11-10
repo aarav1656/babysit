@@ -9,8 +9,17 @@ Start a long job, walk away: Babysit watches its log with zero model calls and w
 - Opens the log once, read-only and without following symlinks, and reads only through that handle. Credential stores, system paths and hard-linked files are refused.
 - Polls every 2 seconds on a daemon thread. The watch loop makes no model calls.
 - Detects progress lines, non-finite metrics (`loss=nan`), out-of-memory errors, tracebacks, stalls, your own alert text, and the watched process exiting (through psutil, no signals sent).
-- Keeps one chat message updated in place, at most once every 5 seconds.
+- Keeps one chat message updated in place, at most once every 5 seconds, as a progress card: bar, step, loss sparkline, ETA, memory, and a line that says `0 model calls while watching`, the wakes used of the budget and the stall limit.
+- Samples the watched process's memory, wakes the session at 90% of its limit, and says how the process ended (`exited with code 1`, `killed (SIGKILL, likely OOM)`).
 - Wakes the session with a wake budget of 15 seconds per event kind and 20 wakes per watch, so a noisy log never becomes a stream of agent turns. The agent gets the log path and reads from there.
+
+## The pane
+
+![Babysit pane in Hermes Desktop: progress ring with ETA, live loss chart with event markers, memory line, wake budget, event timeline and log tail](docs/babysit-pane.png)
+
+Hermes Desktop gets a Babysit pane, a full page and a status chip. Every running watch shows a progress ring with ETA, a loss chart that marks each NaN, alert and traceback where it happened, memory against its limit, the wake budget and the log tail, refreshed every 2 seconds from a read-only route.
+
+![Babysit page in Hermes Desktop with a running job: ring, ETA, loss chart with alert and NaN markers, memory, wake budget, events and log tail](docs/babysit-page.png)
 
 ## Example
 

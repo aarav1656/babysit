@@ -15,6 +15,7 @@ const KIND_LABEL = {
 }
 const KIND_GLYPH = { nan: 'N', oom: 'M', traceback: 'T', stall: 'S', alert: 'A', 'memory-pressure': 'R' }
 const SERIES_LABEL = { rss_mb: 'memory MB' }
+const CLOCKS = new Set(['elapsed', 'time', 'timestamp']) // wall-clock counters chart as a straight line and say nothing
 const RING_RADIUS = 52
 const RING_LENGTH = 2 * Math.PI * RING_RADIUS
 
@@ -114,7 +115,7 @@ const CSS = `
 .bs-root[data-pane=true]{padding:10px 10px 20px}
 .bs-top{display:flex;align-items:center;gap:12px;margin:0 0 18px}
 .bs-title{font-size:20px;font-weight:650;letter-spacing:-.01em}
-.bs-root[data-pane=true] .bs-title{font-size:14px}
+.bs-root[data-pane=true] .bs-title{display:none}.bs-root[data-pane=true] .bs-top{margin-bottom:8px}
 .bs-sub{color:var(--ui-text-tertiary)}
 .bs-pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px;border-radius:999px;border:1px solid var(--ui-stroke-secondary);color:var(--ui-text-secondary);font-size:11.5px;background:var(--ui-bg-quaternary)}
 .bs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,760px),1fr));gap:20px}
@@ -224,7 +225,7 @@ const CSS = `
 .bs-chipbtn{display:inline-flex;align-items:center;gap:6px;padding:0 6px;height:100%;background:none;border:0;color:var(--ui-text-tertiary);font:inherit;font-size:11px;cursor:pointer}
 .bs-chipbtn:hover{color:var(--ui-text-primary)}
 @container (max-width:900px){.bs-body{grid-template-columns:minmax(0,1fr) 250px}.bs-ringcol{grid-column:1 / -1;flex-direction:row;justify-content:flex-start;gap:20px}.bs-ring{width:120px;height:120px}.bs-pct{font-size:27px}.bs-pct small{font-size:13px}}
-@container (max-width:620px){.bs-body{grid-template-columns:minmax(0,1fr);gap:14px}.bs-ringcol{flex-wrap:wrap}.bs-tl{max-height:112px}.bs-side{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.bs-ticks i{height:7px}.bs-wakes strong{font-size:22px}.bs-banner{margin-top:8px;padding:6px 10px}.bs-banner code{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}.bs-tail{margin-top:6px}.bs-tail .ln:not(:nth-last-child(-n+6)){display:none}.bs-path{display:none}.bs-head{padding:12px 12px 0}.bs-body{padding:12px 12px 4px}.bs-banner,.bs-tail{margin-left:12px;margin-right:12px}}
+@container (max-width:620px){.bs-body{grid-template-columns:minmax(0,1fr);gap:14px}.bs-ringcol{flex-wrap:wrap}.bs-tl{max-height:112px}.bs-side{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.bs-ticks i{height:7px}.bs-wakes strong{font-size:22px}.bs-banner{margin-top:8px;padding:6px 10px}.bs-banner code{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}.bs-tail{margin-top:6px}.bs-tail .ln:not(:nth-last-child(-n+5)){display:none}.bs-tail pre{font-size:11px;line-height:1.5}.bs-ring{width:116px;height:116px}.bs-pct{font-size:25px}.bs-pct small{font-size:12px}.bs-step{font-size:10px}.bs-banner code{display:none}.bs-tl{max-height:none}.bs-tl li:not(:nth-last-child(-n+4)){display:none}.bs-tail{padding:5px 0}.bs-head{padding-top:10px}.bs-tail .ln span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.bs-tail .ln{grid-template-columns:40px minmax(0,1fr)}.bs-path{display:none}.bs-head{padding:12px 12px 0}.bs-body{padding:12px 12px 4px}.bs-banner,.bs-tail{margin-left:12px;margin-right:12px}}
 @media (prefers-reduced-motion:reduce){.bs-dot,.bs-banner,.bs-ring .arc,.bs-tl li,.bs-mk,.bs-caret{animation:none!important;transition:none!important}}
 `
 
@@ -272,7 +273,7 @@ function Ring({ watch, tone }) {
 }
 
 function Chart({ watch }) {
-  const keys = Object.keys(watch.series).filter(key => watch.series[key].length > 0)
+  const keys = Object.keys(watch.series).filter(key => watch.series[key].length > 0 && !CLOCKS.has(key))
   const [picked, setPicked] = useState(null)
   const [smooth, setSmooth] = useState(true)
   const [hover, setHover] = useState(null)
@@ -280,7 +281,7 @@ function Chart({ watch }) {
   const width = useWidth(box)
   const key = picked && watch.series[picked] ? picked : watch.primary && watch.series[watch.primary] ? watch.primary : keys[0]
   const points = key ? watch.series[key] : []
-  const height = width < 480 ? 168 : width < 760 ? 188 : 296
+  const height = width < 480 ? 150 : width < 760 ? 158 : 296
   const m = { l: 46, r: 14, t: 18, b: 24 }
   const chips = h('div', { className: 'bs-charthead' },
     h('div', { className: 'bs-chips' }, keys.map(name => h('button', { key: name, type: 'button', className: 'bs-chip',
@@ -360,6 +361,9 @@ function Chart({ watch }) {
             h('div', { key: 'r3', className: 'row' }, h('span', null, 'at'), h('span', null, clock(hp[1])))]) : null))
 }
 
+/** Share of its limit the process holds; under 1% says so instead of rounding to a flat zero. */
+const memPct = mem => (mem.rss / mem.limit < 0.01 ? '<1%' : `${Math.round((mem.rss / mem.limit) * 100)}%`)
+
 function Wakes({ watch }) {
   const budget = watch.wake_budget || 20
   const quiet = watch.stall_seconds ? fmtDuration(watch.stall_seconds) : null
@@ -372,7 +376,7 @@ function Wakes({ watch }) {
     h('div', { className: 'bs-facts' },
       h('span', null, h('b', null, String(watch.model_calls)), ' model calls while watching'),
       quiet ? h('span', null, 'stall after ', h('b', null, quiet), ' quiet') : null,
-      watch.mem ? h('span', null, 'memory ', h('b', null, fmtBytes(watch.mem.rss)), ` · ${Math.round((watch.mem.rss / watch.mem.limit) * 100)}% of ${fmtBytes(watch.mem.limit)}`) : null),
+      watch.mem ? h('span', null, 'memory ', h('b', null, fmtBytes(watch.mem.rss)), ` · ${memPct(watch.mem)} of ${fmtBytes(watch.mem.limit)}`) : null),
     watch.mem ? h('div', { className: 'bs-mem', 'data-hot': watch.mem.rss / watch.mem.limit >= 0.9, 'aria-hidden': true },
       h('i', { style: { width: `${Math.min(100, Math.max(1, (watch.mem.rss / watch.mem.limit) * 100))}%` } })) : null)
 }
