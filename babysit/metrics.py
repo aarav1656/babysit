@@ -186,6 +186,6 @@ class MetricStore:
             "rate": self.rate(), "epoch": list(self.epoch) if self.epoch else None,
             "primary": lead, "series": series,
             "mem": {"rss": self.mem[0], "limit": self.mem[1]} if self.mem else None,
-            "events": [{"x": x, "t": round(t, 1), "kind": kind, "text": text, "count": count}
-                       for x, t, kind, text, count, _last in self.events],
+            "events": [{"x": x, "t": round(t, 1), "kind": kind, "text": text, "count": count, "last": round(last, 1)}
+                       for x, t, kind, text, count, last in self.events],
         }

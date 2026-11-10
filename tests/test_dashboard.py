@@ -81,6 +81,7 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(len(watch["series"]["loss"]), 40)
         self.assertEqual(watch["events"][0]["kind"], "nan")
         self.assertEqual(watch["events"][0]["x"], 4000)
+        self.assertGreaterEqual(watch["events"][0]["last"], watch["events"][0]["t"])
         self.assertEqual(watch["tail"][-1], "step 4000 loss=nan")
         self.assertEqual((watch["repeat_wakes"], watch["wake_budget"], watch["model_calls"]), (1, 20, 0))
         self.assertEqual(watch["stall_seconds"], 600)

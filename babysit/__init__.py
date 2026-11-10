@@ -224,11 +224,11 @@ def _watch_memory(state: dict, now: float) -> None:
         state["mem_hot"] = False
 
 
-def _exit_detail(pid: int, last_fraction: float | None) -> str:
+def _exit_detail(pid: int, last_fraction: float | None, traceback: bool = False) -> str:
     """How a watched process ended, as far as the OS says. ``waitid`` with ``WNOWAIT`` reads the status of a
     child of this process without reaping it, so whoever started the job still gets its own exit code. For a
     process that is not our child the OS keeps nothing: then only a memory sample close to the limit speaks,
-    and without one the detail says the status cannot be read."""
+    and without one the detail says the code cannot be read, and that the log showed a traceback if it did."""
     try:
         info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
     except (OSError, AttributeError):
@@ -242,8 +242,8 @@ def _exit_detail(pid: int, last_fraction: float | None) -> str:
             name = f"signal {info.si_status}"
         return "killed (SIGKILL, likely OOM)" if info.si_status == signal.SIGKILL else f"killed ({name})"
     if last_fraction is not None and last_fraction >= _MEM_COOL:
-        return f"exit status unavailable; memory was at {last_fraction:.0%} of its limit, likely OOM-killed"
-    return "exit status unavailable: the process is not a child of this session"
+        return f"likely OOM-killed (memory was at {last_fraction:.0%} of its limit), exit code unreadable"
+    return ("crashed after a traceback" if traceback else "ended") + ", exit code unreadable (not a child of this session)"
 
 
 def _snapshot_dir() -> Path:
@@ -333,7 +333,8 @@ def _watch_loop(watch_id: str, state: dict) -> None:
             ended = state["pid"] is not None and not _process_alive(state["proc"])
             if ended:
                 state["ended"] = "process ended"
-                state["end_detail"] = _exit_detail(state["pid"], state["mem_fraction"])
+                crashed = any(event[2] == "traceback" for event in state["metrics"].events)
+                state["end_detail"] = _exit_detail(state["pid"], state["mem_fraction"], crashed)
                 _handle_event(state, "process ended", state["last_line"], now, state["end_detail"])
                 break
             _watch_memory(state, now)

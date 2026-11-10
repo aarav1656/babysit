@@ -81,7 +81,7 @@ export function fmtDuration(seconds) {
   const s = Math.max(0, Math.round(seconds))
   if (s < 60) return `${s}s`
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m${String(s % 60).padStart(2, '0')}s`
+  if (m < 60) return s % 60 === 0 ? `${m}m` : `${m}m${String(s % 60).padStart(2, '0')}s`
   const hrs = Math.floor(m / 60)
   return hrs < 48 ? `${hrs}h${String(m % 60).padStart(2, '0')}m` : `${Math.floor(hrs / 24)}d${hrs % 24}h`
 }
@@ -92,9 +92,9 @@ const clock = seconds => `${Math.floor(seconds / 60)}:${String(Math.floor(second
 export function toneOf(watch) {
   if (watch.state === 'lost') return 'warn'
   if (watch.state !== 'running') {
-    return watch.events.some(e => ALARMS.has(e.kind)) || /killed|OOM|exited with code [1-9]/.test(watch.detail || '') ? 'alarm' : 'done'
+    return watch.events.some(e => ALARMS.has(e.kind)) || /killed|OOM|crashed|exited with code [1-9]/.test(watch.detail || '') ? 'alarm' : 'done'
   }
-  const recent = watch.events.filter(e => watch.uptime - e.t < 30)
+  const recent = watch.events.filter(e => watch.uptime - e.last < 30) // a job still repeating its failure stays an alarm
   if (recent.some(e => ALARMS.has(e.kind))) return 'alarm'
   if (recent.some(e => e.kind === 'stall')) return 'warn'
   return 'live'
@@ -193,6 +193,9 @@ const CSS = `
 .bs-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--ui-text-quaternary);margin-bottom:6px;display:flex;justify-content:space-between}
 .bs-wakes{display:flex;align-items:baseline;gap:8px}
 .bs-wakes strong{font-size:26px;font-weight:650;letter-spacing:-.02em}
+.bs-mem{height:4px;border-radius:2px;background:var(--ui-bg-primary);margin-top:7px;overflow:hidden}
+.bs-mem i{display:block;height:100%;border-radius:2px;background:var(--ui-accent)}
+.bs-mem[data-hot=true] i{background:var(--ui-orange)}
 .bs-ticks{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:3px;margin-top:7px}
 .bs-ticks i{height:9px;border-radius:2px;background:var(--ui-bg-primary)}
 .bs-ticks i[data-on=true]{background:var(--ui-accent)}
@@ -221,7 +224,7 @@ const CSS = `
 .bs-chipbtn{display:inline-flex;align-items:center;gap:6px;padding:0 6px;height:100%;background:none;border:0;color:var(--ui-text-tertiary);font:inherit;font-size:11px;cursor:pointer}
 .bs-chipbtn:hover{color:var(--ui-text-primary)}
 @container (max-width:900px){.bs-body{grid-template-columns:minmax(0,1fr) 250px}.bs-ringcol{grid-column:1 / -1;flex-direction:row;justify-content:flex-start;gap:20px}.bs-ring{width:120px;height:120px}.bs-pct{font-size:27px}.bs-pct small{font-size:13px}}
-@container (max-width:620px){.bs-body{grid-template-columns:minmax(0,1fr);gap:14px}.bs-ringcol{flex-wrap:wrap}.bs-tl{max-height:128px}.bs-path{display:none}.bs-head{padding:12px 12px 0}.bs-body{padding:12px 12px 4px}.bs-banner,.bs-tail{margin-left:12px;margin-right:12px}}
+@container (max-width:620px){.bs-body{grid-template-columns:minmax(0,1fr);gap:14px}.bs-ringcol{flex-wrap:wrap}.bs-tl{max-height:112px}.bs-side{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.bs-ticks i{height:7px}.bs-wakes strong{font-size:22px}.bs-banner{margin-top:8px;padding:6px 10px}.bs-banner code{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}.bs-tail{margin-top:6px}.bs-tail .ln:not(:nth-last-child(-n+6)){display:none}.bs-path{display:none}.bs-head{padding:12px 12px 0}.bs-body{padding:12px 12px 4px}.bs-banner,.bs-tail{margin-left:12px;margin-right:12px}}
 @media (prefers-reduced-motion:reduce){.bs-dot,.bs-banner,.bs-ring .arc,.bs-tl li,.bs-mk,.bs-caret{animation:none!important;transition:none!important}}
 `
 
@@ -277,7 +280,7 @@ function Chart({ watch }) {
   const width = useWidth(box)
   const key = picked && watch.series[picked] ? picked : watch.primary && watch.series[watch.primary] ? watch.primary : keys[0]
   const points = key ? watch.series[key] : []
-  const height = width < 480 ? 168 : 296
+  const height = width < 480 ? 168 : width < 760 ? 188 : 296
   const m = { l: 46, r: 14, t: 18, b: 24 }
   const chips = h('div', { className: 'bs-charthead' },
     h('div', { className: 'bs-chips' }, keys.map(name => h('button', { key: name, type: 'button', className: 'bs-chip',
@@ -369,7 +372,9 @@ function Wakes({ watch }) {
     h('div', { className: 'bs-facts' },
       h('span', null, h('b', null, String(watch.model_calls)), ' model calls while watching'),
       quiet ? h('span', null, 'stall after ', h('b', null, quiet), ' quiet') : null,
-      watch.mem ? h('span', null, 'memory ', h('b', null, `${Math.round((watch.mem.rss / watch.mem.limit) * 100)}%`), ` of ${fmtBytes(watch.mem.limit)}`) : null))
+      watch.mem ? h('span', null, 'memory ', h('b', null, fmtBytes(watch.mem.rss)), ` · ${Math.round((watch.mem.rss / watch.mem.limit) * 100)}% of ${fmtBytes(watch.mem.limit)}`) : null),
+    watch.mem ? h('div', { className: 'bs-mem', 'data-hot': watch.mem.rss / watch.mem.limit >= 0.9, 'aria-hidden': true },
+      h('i', { style: { width: `${Math.min(100, Math.max(1, (watch.mem.rss / watch.mem.limit) * 100))}%` } })) : null)
 }
 
 function Timeline({ watch }) {

@@ -73,7 +73,7 @@ def _watch(raw: object, now: float) -> dict | None:
     series = raw.get("series") if isinstance(raw.get("series"), dict) else {}
     events = [
         {"x": _num(e.get("x"), 0), "t": _num(e.get("t"), 0), "kind": _text(e.get("kind"), 40),
-         "text": _text(e.get("text"), 160), "count": _num(e.get("count"), 1)}
+         "text": _text(e.get("text"), 160), "count": _num(e.get("count"), 1), "last": _num(e.get("last"), _num(e.get("t"), 0))}
         for e in (raw.get("events") if isinstance(raw.get("events"), list) else [])[:64] if isinstance(e, dict)
     ]
     epoch = raw.get("epoch")

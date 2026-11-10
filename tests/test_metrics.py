@@ -107,6 +107,13 @@ class BoundTests(unittest.TestCase):
         store.mark("nan", "loss=nan again", 2.0 + 500 * 0.5 + 60)
         self.assertEqual([event[2] for event in store.events], ["alert", "nan", "nan"])
 
+    def test_a_folded_event_publishes_when_it_last_repeated(self):
+        store = fed("step 1")
+        store.mark("nan", "loss=nan", 2.0)
+        store.mark("nan", "loss=nan", 6.0)
+        (event,) = store.snapshot()["events"]
+        self.assertEqual((event["t"], event["last"], event["count"]), (2.0, 6.0, 2))
+
     def test_event_sits_at_the_step_it_happened(self):
         store = fed("step 81 loss=nan")
         store.mark("nan", "step 81 loss=nan", 5.0)
