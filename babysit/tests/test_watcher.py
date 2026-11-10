@@ -1,9 +1,18 @@
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
-from babysit.watcher import EditThrottle, Event, JobWatch, tail_fd, tail_lines
+from babysit.watcher import EditThrottle, JobWatch, tail_fd
+
+
+def tail_lines(path, offset):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        return tail_fd(fd, offset)
+    finally:
+        os.close(fd)
 
 
 class JobWatchTests(unittest.TestCase):
@@ -34,7 +43,7 @@ class JobWatchTests(unittest.TestCase):
         self.assertEqual(traceback_watch.feed("Traceback (most recent call last): again", 1), [])
 
     def test_oom_alert_and_traceback_matching(self):
-        watch = JobWatch(extra_alert_patterns=[r"retry\s+\d+", "urgent"])
+        watch = JobWatch(alert_patterns=["retry 3", "urgent"])
         for line in ("OutOfMemoryError", "MemoryError", "Killed", "please: out of memory"):
             fresh = JobWatch()
             self.assertEqual([event.kind for event in fresh.feed(line, 1)], ["oom"])
@@ -54,7 +63,7 @@ class JobWatchTests(unittest.TestCase):
         watch.feed("epoch 3 complete " + "x" * 220, 3)
         self.assertEqual(len(watch.status), 200)
 
-        explicit = JobWatch(progress_regex=r"DONE: \d+")
+        explicit = JobWatch(progress_pattern="DONE: ")
         explicit.feed("step 4", 0)
         self.assertIsNone(explicit.status)
         explicit.feed("DONE: 7" + "x" * 220, 1)
@@ -73,12 +82,29 @@ class JobWatchTests(unittest.TestCase):
         self.assertEqual(watch.tick(210), [])
         self.assertEqual([event.kind for event in watch.tick(211)], ["stall"])
 
-    def test_exit_events_are_immutable(self):
-        watch = JobWatch()
-        self.assertEqual(watch.exited(0), Event("exit_ok", "exit code 0", ""))
-        self.assertEqual(watch.exited(9), Event("exit_fail", "exit code 9", ""))
-        with self.assertRaises(AttributeError):
-            watch.exited(0).kind = "changed"
+    def test_caller_patterns_are_literal_text_not_regex(self):
+        watch = JobWatch(progress_pattern="(a+)+$", alert_patterns=["(a+)+$", "x.y"])
+        started = time.perf_counter()
+        self.assertEqual(watch.feed("a" * 64 + "b", 0), [])
+        self.assertLess(time.perf_counter() - started, 0.1)
+        self.assertIsNone(watch.status)
+        self.assertEqual(watch.feed("xzy", 1), [])
+        self.assertEqual([event.kind for event in watch.feed("got x.y here", 2)], ["alert"])
+        watch.feed("phase (a+)+$ reached", 3)
+        self.assertEqual(watch.status, "phase (a+)+$ reached")
+
+    def test_adversarial_long_lines_scan_in_linear_time(self):
+        size = 256 * 1024  # quadratic patterns take minutes here, linear ones well under a second
+        lines = {
+            "digits": "1" * size, "dotted digits": "1." * (size // 2), "path-like name": "a/" * (size // 2),
+            "spaced digits": "7 " * (size // 2), "step then spaces": "step" + " " * size + "x",
+            "name then spaces": "loss" + " " * size + "x", "letters": "a" * size,
+        }
+        for name, line in lines.items():
+            with self.subTest(shape=name):
+                started = time.perf_counter()
+                JobWatch(alert_patterns=["boom"]).feed(line, 0)
+                self.assertLess(time.perf_counter() - started, 2.0)
 
 
 class EditThrottleTests(unittest.TestCase):
