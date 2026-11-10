@@ -85,6 +85,10 @@ class PluginTests(unittest.TestCase):
         self.modules.start()
         self.poll = patch("babysit._POLL_SECONDS", 0.01)
         self.poll.start()
+        self.snapshots = Path(self.temp.name) / "snapshots"
+        self.snapshots.mkdir()
+        self.snapshot_dir = patch("babysit._snapshot_dir", lambda: self.snapshots)
+        self.snapshot_dir.start()
         self.fds = open_fds()
 
     def tearDown(self):
@@ -92,6 +96,7 @@ class PluginTests(unittest.TestCase):
         for state in list(_WATCHES.values()):
             state["thread"].join(2)
         _WATCHES.clear()
+        self.snapshot_dir.stop()
         self.poll.stop()
         self.modules.stop()
         self.temp.cleanup()
@@ -506,6 +511,108 @@ class PluginTests(unittest.TestCase):
         self.assertTrue(self.wait_for(lambda: self.injected("loss: nan")))
         time.sleep(0.3)
         self.assertEqual(self.ctx.handle.edits, [])
+
+    def test_card_shows_the_zero_model_call_claim_wake_budget_and_stall_limit(self):
+        self.fast_throttle(0.05)
+        self.start_watch(stall_minutes=10)
+        self.append("step 4/10 loss=1.5\n")
+        self.assertTrue(self.wait_for(lambda: self.edited("stall after 10m quiet")), self.ctx.handle.edits)
+        card = next(text for text in self.ctx.handle.edits if "stall after" in text)
+        self.assertIn("0 model calls while watching · wakes 0/20 · stall after 10m quiet", card)
+        self.append("loss=nan\n")
+        self.assertTrue(self.wait_for(lambda: self.edited("wakes 1/20")), self.ctx.handle.edits)
+
+    def test_memory_pressure_wakes_once_per_climb_and_is_charted(self):
+        self.fast_throttle(0.05)
+        reading = [(50, 100)]
+        with patch("babysit._memory", lambda proc: reading[0]), patch("babysit._MEM_SAMPLE_SECONDS", 0), \
+                patch("babysit._WAKE_MIN_SECONDS", 0):
+            watch_id = self.start_watch(pid=os.getpid())
+            self.assertTrue(self.wait_for(lambda: _WATCHES[watch_id]["metrics"].mem == (50, 100)))
+            self.assertFalse(self.injected("memory-pressure"))
+            reading[0] = (95, 100)
+            self.assertTrue(self.wait_for(lambda: self.injected("memory-pressure in train.log")))
+            time.sleep(0.3)  # many ticks above the line: still one event
+            woke = [text for text, _key in self.ctx.injections if "memory-pressure" in text]
+            self.assertEqual(len(woke), 1, woke)
+            self.assertIn("95B of 100B (95%) in use", woke[0])
+            self.assertNotIn("Log text", woke[0])  # our own words, not quoted log text
+            self.assertTrue(self.wait_for(lambda: self.edited("mem 95B 95%")), self.ctx.handle.edits)
+            reading[0] = (85, 100)  # between 80% and 90%: still armed off
+            time.sleep(0.2)
+            self.assertEqual(len([t for t, _k in self.ctx.injections if "memory-pressure" in t]), 1)
+            reading[0] = (40, 100)
+            self.assertTrue(self.wait_for(lambda: not _WATCHES[watch_id]["mem_hot"]))
+            reading[0] = (96, 100)
+            self.assertTrue(self.wait_for(lambda: len([t for t, _k in self.ctx.injections if "memory-pressure" in t]) == 2))
+            series = _WATCHES[watch_id]["metrics"].snapshot()["series"]["rss_mb"]
+            self.assertGreater(len(series), 3)
+
+    def test_memory_below_the_limit_never_fires(self):
+        with patch("babysit._memory", lambda proc: (89, 100)), patch("babysit._MEM_SAMPLE_SECONDS", 0):
+            watch_id = self.start_watch(pid=os.getpid())
+            self.assertTrue(self.wait_for(lambda: _WATCHES[watch_id]["metrics"].mem == (89, 100)))
+            time.sleep(0.2)
+            self.assertFalse(self.injected("memory-pressure"))
+
+    def test_memory_reading_uses_the_cgroup_limit_else_what_the_machine_has_left(self):
+        proc = psutil.Process()
+        rss = proc.memory_info().rss
+        with patch("babysit._cgroup_limit", lambda: rss * 4):
+            self.assertEqual(babysit._memory(proc)[1], rss * 4)
+        with patch("babysit._cgroup_limit", lambda: None):
+            got, limit = babysit._memory(proc)
+            self.assertGreater(limit, got)
+        self.assertIsNone(babysit._memory(None))
+
+    def test_a_child_killed_by_sigkill_is_reported_as_likely_oom_and_stays_reapable(self):
+        self.fast_throttle(0.1)
+        child = subprocess.Popen([sys.executable, "-c", "import os, signal, time; time.sleep(0.3); os.kill(os.getpid(), signal.SIGKILL)"])
+        self.addCleanup(child.wait)
+        self.start_watch(pid=child.pid)
+        self.assertTrue(self.wait_for(lambda: self.injected("process ended in train.log"), 10))
+        text = next(text for text, _key in self.ctx.injections if "process ended" in text)
+        self.assertIn("killed (SIGKILL, likely OOM)", text)
+        self.assertEqual(child.wait(), -9)  # the watch peeked and left the status for its parent
+        self.assertTrue(self.wait_for(lambda: self.edited("process ended: killed (SIGKILL, likely OOM)")), self.ctx.handle.edits)
+
+    def test_exit_code_and_other_signals_are_reported(self):
+        for code, expected in (("raise SystemExit(3)", "exited with code 3"),
+                               ("import os, signal; os.kill(os.getpid(), signal.SIGTERM)", "killed (SIGTERM)")):
+            with self.subTest(expected=expected):
+                self.ctx = Context()
+                child = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep(0.3); {code}"])
+                self.addCleanup(child.wait)
+                self.start_watch(pid=child.pid)
+                self.assertTrue(self.wait_for(lambda: self.injected(expected), 10), self.ctx.injections)
+
+    def test_a_process_that_is_not_our_child_ends_with_memory_as_the_only_evidence(self):
+        self.assertEqual(babysit._exit_detail(2**31 - 1, None), "")
+        self.assertEqual(babysit._exit_detail(2**31 - 1, 0.5), "")
+        self.assertEqual(babysit._exit_detail(2**31 - 1, 0.94),
+                         "exit status unavailable; memory was at 94% of its limit, likely OOM-killed")
+
+    def test_wake_fallback_is_said_in_the_watch_result_the_list_and_the_slash_command(self):
+        self.ctx._gateway_injection_allowed = lambda: False
+        result = json.loads(_watch({"log_path": str(self.path)}, ctx=self.ctx))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["wake_delivery"], "chat")
+        self.assertIn("allow_gateway_injection: true", result["wake_note"])
+        self.assertIn("do not start an agent turn", result["wake_note"])
+        self.assertEqual(json.loads(_list())["watches"][0]["wake_delivery"], "chat")
+        self.assertIn(babysit._WAKES_OFF, babysit._command(""))
+
+    def test_no_fallback_note_when_wakes_reach_the_agent(self):
+        self.ctx._gateway_injection_allowed = lambda: True
+        result = json.loads(_watch({"log_path": str(self.path)}, ctx=self.ctx))
+        self.assertEqual(result["wake_delivery"], "agent")
+        self.assertNotIn("wake_note", result)
+        self.assertNotIn("allow_gateway_injection", babysit._command(""))
+
+    def test_classic_cli_wakes_reach_the_agent_without_the_setting(self):
+        self.ctx = Context(surface="cli")
+        self.ctx._gateway_injection_allowed = lambda: False
+        self.assertEqual(json.loads(_watch({"log_path": str(self.path)}, ctx=self.ctx))["wake_delivery"], "agent")
 
     def test_register_matches_plugin_yaml(self):
         manifest, key = {}, None

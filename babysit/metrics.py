@@ -46,6 +46,7 @@ def primary_key(keys) -> str | None:
     for key in keys:
         if "loss" in key and not key.startswith(("val", "eval", "test", "valid")):
             return key
+    keys = [key for key in keys if key != "rss_mb"] or keys  # memory leads only a log with no metric of its own
     return next((key for key in keys if "loss" in key), keys[0] if keys else None)
 
 
@@ -70,6 +71,7 @@ class MetricStore:
         self.x = 0  # where the newest sample sits on the x axis: the step, or the line count
         self.lines = 0
         self.t0 = t0  # the clock every sample time and event time counts from
+        self.mem: tuple[int, int] | None = None  # (resident bytes, bytes it may grow to) at the newest sample
         self._progress: deque = deque(maxlen=64)  # (time, fraction done) each time the fraction moved
 
     def feed(self, line: str, now: float) -> None:
@@ -88,12 +90,20 @@ class MetricStore:
             if key in _RATE_KEYS:
                 self.hint = value if value > 0 else self.hint
                 continue
-            points = self.series.get(key)
-            if points is None:
-                if len(self.series) >= MAX_KEYS:
-                    continue
-                points = self.series[key] = deque(maxlen=self.max_points)
-            points.append((self.x, now - self.t0, value))
+            self._add(key, now, value)
+
+    def _add(self, key: str, now: float, value: float) -> None:
+        points = self.series.get(key)
+        if points is None:
+            if len(self.series) >= MAX_KEYS:
+                return
+            points = self.series[key] = deque(maxlen=self.max_points)
+        points.append((self.x, now - (self.t0 if self.t0 is not None else now), value))
+
+    def sample_memory(self, rss: int, limit: int, now: float) -> None:
+        """The watched process's resident memory, charted as ``rss_mb`` beside the log metrics."""
+        self.mem = (rss, limit)
+        self._add("rss_mb", now, rss / 2**20)
 
     def _read_progress(self, line: str, now: float) -> None:
         step = total = None
@@ -174,6 +184,7 @@ class MetricStore:
             "step": self.step, "total": self.total, "frac": self.frac, "eta": eta,
             "rate": self.rate(), "epoch": list(self.epoch) if self.epoch else None,
             "primary": lead, "series": series,
+            "mem": {"rss": self.mem[0], "limit": self.mem[1]} if self.mem else None,
             "events": [{"x": x, "t": round(t, 1), "kind": kind, "text": text, "count": count}
                        for x, t, kind, text, count, _last in self.events],
         }

@@ -1,0 +1,7 @@
+{
+  "name": "babysit",
+  "label": "Babysit",
+  "description": "Live view of the job logs Babysit is watching.",
+  "version": "0.2.0",
+  "api": "plugin_api.py"
+}

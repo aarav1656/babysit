@@ -44,6 +44,14 @@ def fmt_num(value: float) -> str:
     return text
 
 
+def fmt_bytes(value: float) -> str:
+    for unit in "BKMG":
+        if value < 1024:
+            return f"{value:.0f}{unit}" if value >= 10 or unit == "B" else f"{value:.1f}{unit}"
+        value /= 1024
+    return f"{value:.0f}T" if value >= 10 else f"{value:.1f}T"
+
+
 def fmt_duration(seconds: float) -> str:
     seconds = int(seconds)
     if seconds < 60:
@@ -81,6 +89,9 @@ def _metrics_line(store: MetricStore) -> str:
         parts.append(f"{extra} {fmt_num(store.series[extra][-1][2])}")
     if rate := store.rate():
         parts.append(f"{rate:.2g} it/s" if rate >= 0.1 else f"{1 / rate:.2g} s/it")
+    if store.mem:
+        rss, limit = store.mem
+        parts.append(f"mem {fmt_bytes(rss)} {rss / limit:.0%}")
     return "  ".join(parts)
 
 
@@ -93,8 +104,9 @@ def _progress_line(store: MetricStore) -> str:
 
 
 def render_card(name: str, store: MetricStore, last: str, elapsed: float, lines: int,
-                event: tuple[str, str] | None = None) -> str:
-    """Up to four lines: a headline (the event and its marker when one fired), the bar, the metrics, the footer.
+                event: tuple[str, str] | None = None, notes: str = "") -> str:
+    """Up to six lines: a headline (the event and its marker when one fired), the bar, the metrics, the
+    caller's notes (model calls, wakes, stall limit) and the footer.
 
     A log with no step or percentage keeps the plain ``name: last progress line`` headline."""
     where, progress = _where(store), _progress_line(store)
@@ -105,4 +117,4 @@ def render_card(name: str, store: MetricStore, last: str, elapsed: float, lines:
     else:
         head = f"{name}  {where}" if where else f"{name}: {last}".rstrip()
     footer = f"Elapsed: {elapsed:.0f}s | Lines seen: {lines}"
-    return "\n".join(row for row in (head, progress, _metrics_line(store), footer) if row)
+    return "\n".join(row for row in (head, progress, _metrics_line(store), notes, footer) if row)
