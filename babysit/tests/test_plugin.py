@@ -275,6 +275,13 @@ class PluginTests(unittest.TestCase):
         self.assertEqual((_WATCHES, self.ctx.posts, babysit._STARTING), ({}, [], 0))
         self.assertLessEqual(open_fds(), self.fds)
 
+    def test_classic_cli_without_a_session_key_can_watch(self):
+        SESSION["HERMES_SESSION_KEY"] = ""
+        ctx = Context(surface="cli")
+        result = json.loads(_watch({"log_path": str(self.path)}, ctx=ctx))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(_WATCHES), 1)
+
     def test_pattern_arguments_are_validated_as_text(self):
         for args in ({"alert_patterns": "boom"}, {"alert_patterns": [""]}, {"alert_patterns": [3]},
                      {"progress_pattern": ""}, {"progress_pattern": 5}):

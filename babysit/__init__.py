@@ -258,7 +258,9 @@ def _watch(args: dict, *, ctx) -> str:
         if not isinstance(alert_patterns, list) or not all(isinstance(p, str) and p for p in alert_patterns):
             raise ValueError("alert_patterns must be a list of non-empty strings")
         session_key, session_id = _caller()
-        if not session_key:
+        # The classic CLI REPL takes injections without a session key; anywhere else (cron) a
+        # keyless wake could land in whichever session is attached.
+        if not session_key and ctx.session_surface() != "cli":
             raise ValueError("babysit_watch needs a session to report to; call it from a chat or CLI session")
         with _LOCK:
             if len(_WATCHES) + _STARTING >= _MAX_WATCHES:
