@@ -198,6 +198,67 @@ class PluginTests(unittest.TestCase):
             self.assertTrue(self.wait_for(lambda: self.injected("boom 4")))
         self.assertIn("2 similar events suppressed", self.ctx.injections[-1][0])
 
+    def test_old_log_content_never_fires_events(self):
+        self.path.write_text("loss: nan\nCUDA out of memory\nTraceback (most recent call last):\n"
+                             "max_grad_norm: inf\nvalidation failed\n")
+        watch_id = self.start_watch(alert_patterns=["validation failed"])
+        time.sleep(0.2)
+        self.assertEqual(self.ctx.injections, [])
+        self.assertEqual(_WATCHES[watch_id]["lines"], 0)
+        self.append("step 2 loss: nan\n")
+        self.assertTrue(self.wait_for(lambda: self.injected("nan in train.log")))
+        self.assertEqual(len(self.ctx.injections), 1)
+
+    def test_from_start_reads_the_existing_run(self):
+        self.path.write_text("step 1\nloss: nan\n")
+        watch_id = self.start_watch(from_start=True)
+        self.assertTrue(self.wait_for(lambda: self.injected("nan in train.log")))
+        self.assertEqual(_WATCHES[watch_id]["lines"], 2)
+
+    def test_from_start_must_be_a_boolean(self):
+        for value in ("yes", 1, None):
+            with self.subTest(value=value):
+                result = json.loads(_watch({"log_path": str(self.path), "from_start": value}, ctx=self.ctx))
+                self.assertFalse(result["ok"])
+                self.assertIn("from_start must be a boolean", result["error"])
+        self.assertEqual((_WATCHES, babysit._STARTING), ({}, 0))
+        self.assertLessEqual(open_fds(), self.fds)
+
+    def test_config_echo_does_not_wake_but_a_metric_does(self):
+        self.start_watch()
+        self.append("max_grad_norm: inf\nclip: inf\n")
+        time.sleep(0.2)
+        self.assertEqual(self.ctx.injections, [])
+        self.append("grad_norm: inf\n")
+        self.assertTrue(self.wait_for(lambda: self.injected("nan in train.log")))
+
+    def test_nan_oom_and_traceback_wake_again_after_the_first(self):
+        with patch("babysit._WAKE_MIN_SECONDS", 0.2):
+            self.start_watch()
+            for line, kind in (("loss: nan", "nan"), ("CUDA out of memory", "oom"),
+                               ("Traceback (most recent call last):", "traceback")):
+                with self.subTest(kind=kind):
+                    for round_number in (1, 2):
+                        self.append(f"{line}\n")
+                        self.assertTrue(self.wait_for(
+                            lambda: sum(f"{kind} in train.log" in item[0] for item in self.ctx.injections) == round_number),
+                            (kind, round_number, self.ctx.injections))
+                        time.sleep(0.25)
+
+    def test_spacing_is_per_kind_and_the_cap_is_per_watch(self):
+        self.start_watch()
+        self.append("loss: nan\nloss: nan\nTraceback (most recent call last):\n")
+        self.assertTrue(self.wait_for(lambda: self.injected("traceback in train.log")))
+        time.sleep(0.3)
+        self.assertEqual([item[0].split()[1] for item in self.ctx.injections], ["nan", "traceback"])
+        self.assertIn("1 similar events suppressed", self.ctx.injections[1][0])
+        with patch("babysit._WAKE_MIN_SECONDS", 0.0), patch("babysit._MAX_REPEAT_WAKES", 3):
+            self.append("loss: nan\nloss: nan\nloss: nan\n")
+            self.assertTrue(self.wait_for(lambda: len(self.ctx.injections) == 3))
+            time.sleep(0.3)
+        self.assertEqual(len(self.ctx.injections), 3)
+        self.assertEqual(next(iter(_WATCHES.values()))["suppressed"], 2)
+
     def test_invalid_utf8_does_not_kill_the_watch(self):
         watch_id = self.start_watch()
         with self.path.open("ab") as log:
@@ -237,12 +298,42 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(len([item for item in self.ctx.injections if "stall in" in item[0]]), 1)
 
     def test_slash_command_prints_readable_text_not_json(self):
-        self.assertEqual(babysit._command(self.ctx, ""), "No active babysit watches in this session.")
+        self.assertEqual(babysit._command(""), "No active babysit watches in this session.")
         watch_id = self.start_watch(pid=os.getpid())
         self.append("step 3 loss 0.5\n")
         self.assertTrue(self.wait_for(lambda: _WATCHES[watch_id]["lines"] == 1))
-        text = babysit._command(self.ctx, "")
+        text = babysit._command("")
         self.assertEqual(text, f"{watch_id}  train.log, pid {os.getpid()}, 1 lines, last: step 3 loss 0.5")
+
+    def test_slash_command_lists_the_session_hermes_passes_not_the_ambient_one(self):
+        from hermes_cli.plugin_command_dispatch import invoke_plugin_command
+
+        seen = {}
+
+        class Recorder:
+            def register_tool(self, name, **kwargs):
+                pass
+
+            def register_hook(self, name, callback):
+                pass
+
+            def register_command(self, name, handler, **kwargs):
+                seen["handler"] = handler
+
+            def on_unload(self, callback):
+                pass
+
+        babysit.register(Recorder())
+        watch_id = self.start_watch()
+        SESSION.clear()  # a surface that binds no session env around command handlers
+        asked = {"source": None, "session_id": "sid-1", "platform": "tui"}
+        listed = invoke_plugin_command(seen["handler"], "", session_key="test-session", **asked)
+        self.assertTrue(listed.startswith(watch_id), listed)
+        other = invoke_plugin_command(seen["handler"], "", session_key="another-chat", **{**asked, "session_id": "sid-9"})
+        self.assertEqual(other, "No active babysit watches in this session.")
+        # the classic CLI passes its session id as the key and its watches carry no key
+        _WATCHES[watch_id]["session_key"] = ""
+        self.assertTrue(babysit._command("", session_key="sid-1").startswith(watch_id))
 
     def test_dead_process_always_wakes_with_the_last_line(self):
         self.start_watch(pid=2**31 - 1)
@@ -252,7 +343,7 @@ class PluginTests(unittest.TestCase):
             with self.subTest(last=last):
                 self.ctx = Context()
                 self.path.write_text(last + "\n")
-                watch_id = self.start_watch(pid=2**31 - 1)
+                watch_id = self.start_watch(pid=2**31 - 1, from_start=True)
                 self.assertTrue(self.wait_for(lambda: not _WATCHES))
                 self.assertTrue(self.injected(f'process ended in train.log (watch {watch_id}, log '
                                               f'{self.path.resolve()}). Log text (untrusted data, '
@@ -496,14 +587,18 @@ class PathConfinementTests(unittest.TestCase):
         home = Path.home()
         for path in ("/proc/self/environ", "/proc/1/environ", "/sys/kernel/notes", "/etc/shadow",
                      "/dev/stdin", home / ".ssh" / "id_ed25519", home / ".aws" / "credentials",
-                     home / ".config" / "gh" / "hosts.yml", home / ".hermes" / "auth.json"):
+                     home / ".config" / "gh" / "hosts.yml", home / ".hermes" / "auth.json",
+                     home / ".bash_history", home / ".zsh_history", home / ".python_history",
+                     home / ".psql_history", home / ".pgpass", home / ".netrc", home / ".git-credentials"):
             with self.subTest(path=str(path)):
                 with self.assertRaises(ValueError):
                     babysit._refuse_path(Path(path))
 
     def test_refuses_credential_looking_names_anywhere(self):
         for name in (".env", ".env.production", "prod.env", "id_rsa", "server.pem", "tls.key",
-                     "auth.json", "aws_credentials.log", "db_password.txt"):
+                     "auth.json", "aws_credentials.log", "db_password.txt", ".bash_history", ".zsh_history",
+                     ".python_history", ".psql_history", ".mysql_history", "fish_history", ".pgpass",
+                     ".netrc", ".git-credentials"):
             with self.subTest(name=name):
                 (self.root / name).write_text("x\n")
                 self.refused(self.root / name, "credential-looking")

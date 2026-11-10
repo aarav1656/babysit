@@ -46,6 +46,13 @@ SCRIPT = textwrap.dedent("""
             break
         time.sleep(0.2)
     out["listed"] = watches
+    # /babysit as the TUI and gateway dispatch it: Hermes' own handler lookup and keyword call, no session env bound.
+    from hermes_cli.plugin_command_dispatch import invoke_plugin_command
+    from hermes_cli.plugins import get_plugin_command_handler
+    handler = get_plugin_command_handler("babysit")
+    asked = dict(source=None, session_id="sid-loader", platform="tui")
+    out["command"] = invoke_plugin_command(handler, "", session_key="agent:main:telegram:dm:1", **asked)
+    out["command_other_session"] = invoke_plugin_command(handler, "", session_key="agent:main:telegram:dm:2", **asked)
     invoke_hook("on_session_finalize", session_id="sid-loader", platform="telegram")
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and any(t.name.startswith("babysit-") for t in threading.enumerate()):
@@ -77,7 +84,7 @@ class HermesLoaderTests(unittest.TestCase):
         self.assertTrue(watch_def["description"])
         self.assertEqual(watch_def["parameters"]["required"], ["log_path"])
         self.assertEqual(sorted(watch_def["parameters"]["properties"]),
-                         ["alert_patterns", "log_path", "pid", "progress_pattern", "stall_minutes"])
+                         ["alert_patterns", "from_start", "log_path", "pid", "progress_pattern", "stall_minutes"])
         self.assertEqual(out["definitions"]["babysit_stop"]["parameters"]["required"], ["watch_id"])
         self.assertEqual(out["definitions"]["babysit_list"]["parameters"]["type"], "object")
         self.assertFalse(out["unbound"]["ok"])
@@ -87,6 +94,8 @@ class HermesLoaderTests(unittest.TestCase):
         [watch] = out["listed"]
         self.assertEqual((watch["watch_id"], watch["lines"], watch["status"]),
                          (out["watch"]["watch_id"], 1, "step 1 loss: nan"))
+        self.assertTrue(out["command"].startswith(watch["watch_id"]), out["command"])
+        self.assertEqual(out["command_other_session"], "No active babysit watches in this session.")
         # No live gateway here: Hermes refuses the injection and the chat post, and the watch says so.
         self.assertEqual(watch["notify_error"],
                          "session injection refused and the chat post failed: gateway_unavailable")
