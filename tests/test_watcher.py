@@ -26,21 +26,27 @@ class JobWatchTests(unittest.TestCase):
         self.assertEqual([event.kind for event in other.feed("loss=inf", 0)], ["nan"])
         self.assertEqual([event.kind for event in JobWatch().feed("val_loss nan", 0)], ["nan"])
 
-    def test_nan_oom_and_traceback_each_deduplicate(self):
-        watch = JobWatch()
-        self.assertEqual([event.kind for event in watch.feed("loss nan", 0)], ["nan"])
-        self.assertEqual(watch.feed("val_loss: inf", 1), [])
+    def test_non_finite_fires_on_metric_values(self):
+        for line in ("step 81 epoch 1 loss=nan lr=0.1000", "val_loss: inf", "grad_norm: nan", "valLoss=nan",
+                     "train/loss: -inf", "gradNorm = Infinity", "epoch 3 | 0.52 nan 0.33", "eval acc=-nan"):
+            with self.subTest(line=line):
+                self.assertEqual([event.kind for event in JobWatch().feed(line, 0)], ["nan"])
 
-        oom_watch = JobWatch()
-        self.assertEqual([event.kind for event in oom_watch.feed("CUDA out of memory", 0)], ["oom"])
-        self.assertEqual(oom_watch.feed("out of memory", 1), [])
+    def test_non_finite_ignores_config_style_lines(self):
+        for line in ("max_grad_norm: inf", "--max_grad_norm=inf", "clip: inf", "grad_clip = inf",
+                     "loss_threshold: inf", "timeout=inf", "fill_value: nan", "nan_policy: omit",
+                     "Namespace(lr=0.1, max_steps=inf)", "min_lr: -inf", "lr: 0.1  clip: inf"):
+            with self.subTest(line=line):
+                self.assertEqual(JobWatch().feed(line, 0), [])
 
-        traceback_watch = JobWatch()
-        self.assertEqual(
-            [event.kind for event in traceback_watch.feed("Traceback (most recent call last):", 0)],
-            ["traceback"],
-        )
-        self.assertEqual(traceback_watch.feed("Traceback (most recent call last): again", 1), [])
+    def test_nan_oom_and_traceback_fire_every_time(self):
+        for first, second in (("loss nan", "val_loss: inf"), ("CUDA out of memory", "out of memory"),
+                              ("Traceback (most recent call last):", "Traceback (most recent call last):")):
+            with self.subTest(first=first):
+                watch = JobWatch()
+                kinds = [event.kind for event in watch.feed(first, 0)]
+                self.assertEqual(len(kinds), 1)
+                self.assertEqual([event.kind for event in watch.feed(second, 1)], kinds)
 
     def test_oom_alert_and_traceback_matching(self):
         watch = JobWatch(alert_patterns=["retry 3", "urgent"])
@@ -99,6 +105,8 @@ class JobWatchTests(unittest.TestCase):
             "digits": "1" * size, "dotted digits": "1." * (size // 2), "path-like name": "a/" * (size // 2),
             "spaced digits": "7 " * (size // 2), "step then spaces": "step" + " " * size + "x",
             "name then spaces": "loss" + " " * size + "x", "letters": "a" * size,
+            "repeated nan": "nan " * (size // 4), "repeated keyed nan": "loss nan " * (size // 9),
+            "number then nan": "1 " * (size // 2) + "nan", "camel case": "aA" * (size // 2) + " nan",
         }
         for name, line in lines.items():
             with self.subTest(shape=name):

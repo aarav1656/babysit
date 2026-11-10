@@ -9,10 +9,36 @@ _PROGRESS = re.compile(
     r"(?<!\d)\d+(?:\.\d+)?\s*%|\b(?:step|epoch|iter)\s*(?:[:=#]\s*)?\d+|(?<!\d)\d+\s*\b(?:step|epoch|iter)\b",
     re.IGNORECASE,
 )
-_NON_FINITE = re.compile(
-    r"(?<![\w./-])(?=[\w./-]*[A-Za-z_])[\w./-]+(?:\s*[:=]\s*|\s+)(?:nan|inf(?:inity)?)\b",
+# A keyed non-finite value ("loss=nan", "val_loss: -inf", "grad_norm nan") counts only when the key names a
+# metric and no part of it marks a setting: "max_grad_norm: inf" or "clip: inf" is a config echo, not a
+# failing run. A bare nan (no key) counts when another number sits on the line, as in a metrics table row.
+_KEYED_NON_FINITE = re.compile(
+    r"(?<![\w./-])(?=[\w./-]*[A-Za-z_])([\w./-]+)(?:\s*[:=]\s*|\s+)[+-]?(?:nan|inf(?:inity)?)\b",
     re.IGNORECASE,
 )
+_BARE_NAN = re.compile(r"(?<![\w.])[+-]?nan(?![\w.])", re.IGNORECASE)
+_NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.])")
+_KEY_PARTS = re.compile(r"[_./-]+|(?<=[a-z])(?=[A-Z])")
+_METRIC_WORDS = frozenset({
+    "loss", "nll", "ppl", "perplexity", "acc", "accuracy", "f1", "auc", "mse", "mae", "rmse", "reward",
+    "score", "grad", "gradient", "norm", "entropy", "kl", "lr", "val",
+})
+_SETTING_WORDS = frozenset({
+    "max", "min", "clip", "clipping", "limit", "thresh", "threshold", "init", "initial", "default", "cap",
+    "bound", "timeout",
+})
+
+
+def _is_metric_key(key: str) -> bool:
+    words = {word.lower() for word in _KEY_PARTS.split(key) if word}
+    return bool(words & _METRIC_WORDS) and not words & _SETTING_WORDS
+
+
+def _non_finite(line: str) -> bool:
+    if any(_is_metric_key(match.group(1)) for match in _KEYED_NON_FINITE.finditer(line)):
+        return True
+    bare = _BARE_NAN.search(line)
+    return bool(bare) and _NUMBER.search(line) is not None
 
 
 @dataclass(frozen=True)
@@ -37,7 +63,6 @@ class JobWatch:
         self.status: str | None = None
         self.last_line_time: float | None = None
         self.stalled = False
-        self.seen: set[str] = set()
 
     def feed(self, line: str, now: float) -> list[Event]:
         self.last_line_time = now
@@ -50,25 +75,19 @@ class JobWatch:
             self.status = line.strip()[:200]
 
         events = []
-        if _NON_FINITE.search(line):
-            events.extend(self._once("nan", "non-finite metric value", line))
+        if _non_finite(line):
+            events.append(Event("nan", "non-finite metric value", line))
         if re.search(
             r"CUDA out of memory|OutOfMemoryError|MemoryError|^\s*Killed\s*$|out of memory",
             line,
             re.IGNORECASE,
         ):
-            events.extend(self._once("oom", "out of memory", line))
+            events.append(Event("oom", "out of memory", line))
         if any(pattern in line for pattern in self.alert_patterns):
             events.append(Event("alert", "alert pattern matched", line))
         if line.startswith("Traceback (most recent call last)"):
-            events.extend(self._once("traceback", "traceback detected", line))
+            events.append(Event("traceback", "traceback detected", line))
         return events
-
-    def _once(self, kind: str, detail: str, line: str) -> list[Event]:
-        if kind in self.seen:
-            return []
-        self.seen.add(kind)
-        return [Event(kind, detail, line)]
 
     def tick(self, now: float) -> list[Event]:
         if (
