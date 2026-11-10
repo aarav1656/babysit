@@ -75,16 +75,20 @@ def _where(store: MetricStore) -> str:
     return "  ".join(parts)
 
 
-def _metrics_line(store: MetricStore) -> str:
+def _lead(store: MetricStore, width: int) -> str:
+    """``loss 1.36 ▁▂▃▅``: the metric a chart leads with, its newest value and a sparkline."""
+    lead = primary_key(key for key, points in store.series.items() if points)
+    if not lead or lead == "rss_mb":
+        return ""
+    return " ".join(filter(None, (lead, fmt_num(store.series[lead][-1][2]), sparkline(store.values(lead, _SPARK_WINDOW), width))))
+
+
+def _metrics_line(store: MetricStore, lead: bool = True) -> str:
     keys = [key for key, points in store.series.items() if points]
-    lead = primary_key(keys)
-    parts = []
-    if lead:
-        last = store.series[lead][-1][2]
-        parts.append(" ".join(filter(None, (lead, fmt_num(last), sparkline(store.values(lead, _SPARK_WINDOW))))))
+    parts = [_lead(store, 10)] if lead else []
     if "lr" in store.series:
         parts.append(f"lr {fmt_num(store.series['lr'][-1][2])}")
-    extra = next((key for key in _EXTRA if key in store.series and key != lead), None)
+    extra = next((key for key in _EXTRA if key in store.series and key != primary_key(keys)), None)
     if extra:
         parts.append(f"{extra} {fmt_num(store.series[extra][-1][2])}")
     if rate := store.rate():
@@ -92,29 +96,47 @@ def _metrics_line(store: MetricStore) -> str:
     if store.mem:
         rss, limit = store.mem
         parts.append(f"mem {fmt_bytes(rss)} {rss / limit:.0%}")
-    return "  ".join(parts)
+    return "  ".join(part for part in parts if part)
+
+
+def _eta(store: MetricStore) -> str:
+    eta = store.eta()
+    return "done" if store.frac is not None and store.frac >= 1 else f"ETA {fmt_duration(eta)}" if eta is not None else "ETA ?"
 
 
 def _progress_line(store: MetricStore) -> str:
-    if store.frac is None:
-        return ""
-    eta = store.eta()
-    done = store.frac >= 1
-    return f"{bar(store.frac)} " + ("done" if done else f"ETA {fmt_duration(eta)}" if eta is not None else "ETA ?")
+    return "" if store.frac is None else f"{bar(store.frac)} {_eta(store)}"
+
+
+def _headline(name: str, store: MetricStore) -> str:
+    """One line that carries the job's state alone, because some surfaces (the TUI status bar) show only the
+    first line of a status message: ``train.log ▕████▏ 41%  step 4100/10000  loss 1.36 ▁▃▅  ETA 17m``."""
+    parts = []
+    if store.frac is not None:
+        parts.append(f"{bar(store.frac, 10)} {store.frac * 100:.0f}%")
+    if store.step is not None:
+        parts.append(f"step {store.step}/{store.total}" if store.total else f"step {store.step}")
+    if lead := _lead(store, 6):
+        parts.append(lead)
+    if store.frac is not None:
+        parts.append(_eta(store))
+    return f"{name} " + "  ".join(parts)
 
 
 def render_card(name: str, store: MetricStore, last: str, elapsed: float, lines: int,
                 event: tuple[str, str] | None = None, notes: str = "") -> str:
-    """Up to six lines: a headline (the event and its marker when one fired), the bar, the metrics, the
-    caller's notes (model calls, wakes, stall limit) and the footer.
+    """Up to five lines. Without an event the first line is the whole state (bar, step, loss, ETA) and the
+    second the secondary metrics; with one, the event and its marker lead, then the progress bar and every metric.
+    The caller's notes (model calls, wakes, stall limit) and the footer close it.
 
     A log with no step or percentage keeps the plain ``name: last progress line`` headline."""
-    where, progress = _where(store), _progress_line(store)
-    if event is not None:
-        kind, text = event
-        head = f"{_MARKERS.get(kind, '■')} {name}: {kind}: {text}".rstrip()
-        progress = f"{progress}  {where}".strip() if progress else where
-    else:
-        head = f"{name}  {where}" if where else f"{name}: {last}".rstrip()
     footer = f"Elapsed: {elapsed:.0f}s | Lines seen: {lines}"
+    if event is None:
+        if store.frac is None and store.step is None:
+            return "\n".join(row for row in (f"{name}: {last}".rstrip(), _metrics_line(store), notes, footer) if row)
+        return "\n".join(row for row in (_headline(name, store), _metrics_line(store, lead=False), notes, footer) if row)
+    kind, text = event
+    head = f"{_MARKERS.get(kind, '■')} {name}: {kind}: {text}".rstrip()
+    where, progress = _where(store), _progress_line(store)
+    progress = f"{progress}  {where}".strip() if progress else where
     return "\n".join(row for row in (head, progress, _metrics_line(store), notes, footer) if row)

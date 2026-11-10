@@ -37,7 +37,7 @@ class ParseTests(unittest.TestCase):
 
     def test_config_echoes_are_not_metrics(self):
         store = fed("max_grad_norm: inf", "--clip=3 --lr=0.1", "Namespace(max_steps=100, min_lr=1e-6, timeout=5)",
-                    "default_batch=32 init_scale=2 grad_clip: 1.0")
+                    "default_batch=32 init_scale=2 grad_clip: 1.0", "[init] bs=128 batch_size=64 seed=3 workers=4 world_size=8")
         self.assertEqual(store.series, {})
 
     def test_step_total_formats(self):
@@ -253,11 +253,11 @@ class CardTests(unittest.TestCase):
         for i in range(1, 42):
             store.feed(f"step {i * 100}/10000 loss={3 - i * 0.04:.2f} lr=3e-4 it/s=1.9", i * 0.5)
         card = render_card("train.log", store, "ignored", 20.5, 41).split("\n")
-        self.assertEqual(card[0], "train.log  step 4100/10000  41%")
-        self.assertRegex(card[1], r"^▕█{8}[▏▎▍▌▋▊▉]? +▏ ETA \d+[ms]")
-        self.assertRegex(card[2], r"^loss 1\.36 [▁-█]{10}  lr 3e-4  1\.9 it/s$")
-        self.assertEqual(card[3], "Elapsed: 20s | Lines seen: 41")
-        self.assertEqual(len(card), 4)
+        self.assertRegex(card[0], r"^train\.log ▕█{4}[▏▎▍▌▋▊▉]? +▏ 41%  step 4100/10000  loss 1\.36 [▁-█]{6}  ETA \d+[ms]$")
+        self.assertRegex(card[1], r"^lr 3e-4  1\.9 it/s$")
+        self.assertEqual(card[2], "Elapsed: 20s | Lines seen: 41")
+        self.assertEqual(len(card), 3)
+        self.assertLess(len(card[0]), 80)  # the TUI status bar shows this line and no other
 
     def test_event_card_leads_with_the_marker_and_the_event_line(self):
         store = MetricStore(t0=0)
@@ -279,9 +279,9 @@ class CardTests(unittest.TestCase):
 
     def test_finished_job_says_done_and_unknown_eta_says_so(self):
         done = fed("step 10/10 loss=0.1")
-        self.assertIn("done", render_card("j", done, "", 1, 1).split("\n")[1])
+        self.assertTrue(render_card("j", done, "", 1, 1).split("\n")[0].endswith("done"))
         unknown = fed("step 5/10 loss=0.1")
-        self.assertTrue(render_card("j", unknown, "", 1, 1).split("\n")[1].endswith("ETA ?"))
+        self.assertTrue(render_card("j", unknown, "", 1, 1).split("\n")[0].endswith("ETA ?"))
 
     def test_extra_metric_is_the_first_known_of_the_preferred_list(self):
         store = fed("step 1/9 loss=1 acc=0.5 grad_norm=2", "step 2/9 loss=1 acc=0.6 grad_norm=2")

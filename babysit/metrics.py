@@ -31,6 +31,7 @@ _PERCENT = re.compile(
     r"|(?:progress|done|complete[d]?)[ \t]{0,3}[:=]?[ \t]{0,3}(\d{1,3}(?:\.\d{1,3})?)[ \t]{0,2}%", re.I)
 _RATE = re.compile(r"(?<![\w.])(\d{1,9}(?:\.\d{1,9})?)[ \t]{0,2}(it/s|s/it|steps?/s)(?!\w)", re.I)
 _STEP_KEYS = frozenset({"step", "steps", "iter", "iters", "iteration", "global_step", "epoch", "epochs"})
+_CONFIG_KEYS = frozenset({"bs", "batch", "batch_size", "seed", "workers", "num_workers", "world_size", "rank"})
 _RATE_KEYS = frozenset({"it/s", "its", "it_s", "iter/s", "iter_per_sec", "steps_per_sec", "step/s", "steps/s"})
 
 
@@ -82,7 +83,7 @@ class MetricStore:
         self.x = self.step if self.step is not None else self.lines
         for match in islice(_KV.finditer(line), MAX_PAIRS):
             key = match.group(1).lower()
-            if key in _STEP_KEYS or _is_setting(key):
+            if key in _STEP_KEYS or key in _CONFIG_KEYS or _is_setting(key):
                 continue
             value = float(match.group(2))
             if not math.isfinite(value):

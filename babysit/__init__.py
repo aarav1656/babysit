@@ -227,7 +227,8 @@ def _watch_memory(state: dict, now: float) -> None:
 def _exit_detail(pid: int, last_fraction: float | None) -> str:
     """How a watched process ended, as far as the OS says. ``waitid`` with ``WNOWAIT`` reads the status of a
     child of this process without reaping it, so whoever started the job still gets its own exit code. For a
-    process that is not our child the OS keeps nothing: then only a memory sample close to the limit speaks."""
+    process that is not our child the OS keeps nothing: then only a memory sample close to the limit speaks,
+    and without one the detail says the status cannot be read."""
     try:
         info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
     except (OSError, AttributeError):
@@ -242,7 +243,7 @@ def _exit_detail(pid: int, last_fraction: float | None) -> str:
         return "killed (SIGKILL, likely OOM)" if info.si_status == signal.SIGKILL else f"killed ({name})"
     if last_fraction is not None and last_fraction >= _MEM_COOL:
         return f"exit status unavailable; memory was at {last_fraction:.0%} of its limit, likely OOM-killed"
-    return ""
+    return "exit status unavailable: the process is not a child of this session"
 
 
 def _snapshot_dir() -> Path:
