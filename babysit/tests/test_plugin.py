@@ -355,8 +355,18 @@ class PathConfinementTests(unittest.TestCase):
         self.log = self.root / "train.log"
         self.log.write_text("step 1\n")
         self.fds = open_fds()
+        self._previous_hermes = sys.modules.get("hermes_constants")
+        stub = types.ModuleType("hermes_constants")
+        stub.get_hermes_home = lambda: Path("~/.hermes").expanduser()
+        stub.get_process_hermes_home = lambda: Path("~/.hermes").expanduser()
+        stub.get_default_hermes_root = lambda: Path("~/.hermes").expanduser()
+        sys.modules["hermes_constants"] = stub
 
     def tearDown(self):
+        if self._previous_hermes is None:
+            sys.modules.pop("hermes_constants", None)
+        else:
+            sys.modules["hermes_constants"] = self._previous_hermes
         self.temp.cleanup()
 
     def refused(self, value, pattern=""):

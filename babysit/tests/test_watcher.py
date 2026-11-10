@@ -36,7 +36,8 @@ class JobWatchTests(unittest.TestCase):
     def test_oom_alert_and_traceback_matching(self):
         watch = JobWatch(extra_alert_patterns=[r"retry\s+\d+", "urgent"])
         for line in ("OutOfMemoryError", "MemoryError", "Killed", "please: out of memory"):
-            self.assertEqual([event.kind for event in watch.feed(line, 1)], ["oom"] if line == "OutOfMemoryError" else [])
+            fresh = JobWatch()
+            self.assertEqual([event.kind for event in fresh.feed(line, 1)], ["oom"])
         self.assertEqual(watch.feed("prefix Traceback (most recent call last)", 2), [])
         alert = watch.feed("retry 3, urgent", 3)
         self.assertEqual([event.kind for event in alert], ["alert"])

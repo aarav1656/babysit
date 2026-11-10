@@ -34,10 +34,10 @@ Each watch runs in a daemon thread and ends when you stop it, when its session i
 
 ## Setup
 
-Install Babysit as a user plugin, then enable it:
+Install and enable:
 
 ```sh
-hermes plugins enable babysit
+hermes plugins install aarav1656/babysit/babysit --enable
 ```
 
 Waking a session requires this setting in the active profile's `config.yaml`:
@@ -57,7 +57,7 @@ Babysit reads the selected log file through one read-only handle, opened without
 
 ## Tests
 
-Run from the repository root:
+Run from the repository root with the Python environment Hermes runs in:
 
 ```sh
 python -m unittest discover -s babysit/tests -t .
