@@ -354,7 +354,9 @@ def _cleanup() -> None:
 def register(ctx) -> None:
     ctx.register_tool(
         name="babysit_watch", toolset="babysit", schema={
-            "type": "object", "properties": {
+            "name": "babysit_watch",
+            "description": "Watch a job log and wake this session when it stalls or reports an issue.",
+            "parameters": {"type": "object", "properties": {
                 "log_path": {"type": "string", "description": "Absolute path to an existing job log file."},
                 "pid": {"type": ["integer", "null"], "description": "Optional process id to monitor."},
                 "progress_pattern": {"type": ["string", "null"],
@@ -363,16 +365,18 @@ def register(ctx) -> None:
                 "alert_patterns": {"type": "array", "items": {"type": "string"}, "default": [],
                                    "description": "Text that wakes the agent when a line contains it "
                                                   "(plain substrings, case-sensitive)."},
-            }, "required": ["log_path"],
+            }, "required": ["log_path"]},
         }, handler=lambda args, **kwargs: _watch(args, ctx=ctx),
         description="Watch a job log and wake this session when it stalls or reports an issue.",
     )
     ctx.register_tool(name="babysit_stop", toolset="babysit", schema={
-        "type": "object", "properties": {"watch_id": {"type": "string"}},
-        "required": ["watch_id"],
+        "name": "babysit_stop", "description": "Stop an active babysit watch.",
+        "parameters": {"type": "object", "properties": {"watch_id": {"type": "string"}},
+                       "required": ["watch_id"]},
     }, handler=_stop, description="Stop an active babysit watch.")
     ctx.register_tool(name="babysit_list", toolset="babysit", schema={
-        "type": "object", "properties": {},
+        "name": "babysit_list", "description": "List active babysit watches.",
+        "parameters": {"type": "object", "properties": {}},
     }, handler=_list, description="List active babysit watches.")
     ctx.register_command("babysit", lambda raw: _command(ctx, raw),
                          description="List active job watches")
