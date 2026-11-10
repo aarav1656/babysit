@@ -292,6 +292,13 @@ class PluginTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(len(_WATCHES), 1)
 
+    def test_misnamed_arguments_are_refused_not_silently_dropped(self):
+        result = json.loads(_watch({"log_path": str(self.path), "alert_on": "validation failed"}, ctx=self.ctx))
+        self.assertFalse(result["ok"])
+        self.assertIn("unknown argument(s) alert_on", result["error"])
+        self.assertIn("alert_patterns", result["error"])
+        self.assertEqual((len(_WATCHES), self.ctx.posts), (0, []))
+
     def test_pattern_arguments_are_validated_as_text(self):
         for args in ({"alert_patterns": "boom"}, {"alert_patterns": [""]}, {"alert_patterns": [3]},
                      {"progress_pattern": ""}, {"progress_pattern": 5}):

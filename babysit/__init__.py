@@ -20,6 +20,7 @@ _MAX_AGE_SECONDS = 72 * 60 * 60
 _MAX_WATCHES = 8
 _WAKE_MIN_SECONDS = 15.0
 _MAX_REPEAT_WAKES = 20
+_WATCH_ARGS = frozenset({"log_path", "pid", "progress_pattern", "stall_minutes", "alert_patterns"})
 _REPEATING_KINDS = frozenset({"alert", "stall"})
 _LOCK = threading.RLock()
 _STARTING = 0
@@ -244,6 +245,9 @@ def _watch(args: dict, *, ctx) -> str:
     reserved = False
     fd = None
     try:
+        unknown = sorted(set(args) - _WATCH_ARGS)
+        if unknown:
+            raise ValueError(f"unknown argument(s) {', '.join(unknown)}; accepted: {', '.join(sorted(_WATCH_ARGS))}")
         fd, path = _open_log(str(args.get("log_path", "")))
         pid = args.get("pid")
         if pid is not None and (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0):
