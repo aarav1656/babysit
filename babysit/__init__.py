@@ -191,12 +191,12 @@ def _watch_loop(watch_id: str, state: dict) -> None:
 
 
 def _final_edit(state: dict) -> None:
-    """A watch that ends on its own (process ended, 72 hours) shows that last event in the status
+    """A watch that ends (process ended, 72 hours, stopped) shows that last event in the status
     message: wait out the rest of the edit interval instead of dropping it."""
     throttle = state["throttle"]
     if state["handle"] is None or state["pending"] is None or throttle.last_edit_time is None:
         return
-    state["stop"].wait(max(0.0, throttle.min_interval - (time.monotonic() - throttle.last_edit_time)))
+    time.sleep(max(0.0, throttle.min_interval - (time.monotonic() - throttle.last_edit_time)))
     _flush_edit(state, time.monotonic())
 
 
@@ -336,6 +336,9 @@ def _stop(args: dict, **kwargs) -> str:
         if state is not None and state["session_key"] != session_key:
             state = None
         if state is not None:
+            # the status message would otherwise keep showing the last progress line as if live
+            state["pending"] = (f"{state['name']}: watch stopped\nElapsed: {time.monotonic() - state['started']:.0f}s"
+                                f" | Lines seen: {state['lines']}")
             state["stop"].set()
     return json.dumps({"ok": state is not None, "watch_id": watch_id})
 
