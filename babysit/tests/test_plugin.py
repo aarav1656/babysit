@@ -232,6 +232,14 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(json.loads(_list())["watches"][0]["watch_id"], watch_id)
         self.assertEqual(len([item for item in self.ctx.injections if "stall in" in item[0]]), 1)
 
+    def test_slash_command_prints_readable_text_not_json(self):
+        self.assertEqual(babysit._command(self.ctx, ""), "No active babysit watches in this session.")
+        watch_id = self.start_watch(pid=os.getpid())
+        self.append("step 3 loss 0.5\n")
+        self.assertTrue(self.wait_for(lambda: _WATCHES[watch_id]["lines"] == 1))
+        text = babysit._command(self.ctx, "")
+        self.assertEqual(text, f"{watch_id}  train.log, pid {os.getpid()}, 1 lines, last: step 3 loss 0.5")
+
     def test_dead_process_always_wakes_with_the_last_line(self):
         self.start_watch(pid=2**31 - 1)
         self.assertTrue(self.wait_for(lambda: self.injected("process ended in train.log")))

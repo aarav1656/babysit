@@ -334,7 +334,17 @@ def _list(args: dict | None = None, **kwargs) -> str:
 
 
 def _command(ctx, raw_args: str) -> str:
-    return _list()
+    watches = json.loads(_list())["watches"]
+    if not watches:
+        return "No active babysit watches in this session."
+    lines = []
+    for item in watches:
+        pid = f", pid {item['pid']}" if item["pid"] is not None else ""
+        lines.append(f"{item['watch_id']}  {item['name']}{pid}, {item['lines']} lines"
+                     + (f", last: {item['status']}" if item["status"] else ""))
+        if item["notify_error"]:
+            lines.append(f"    delivery problem: {item['notify_error']}")
+    return "\n".join(lines)
 
 
 def _on_session_finalize(session_id=None, old_session_id=None, **kwargs) -> None:
