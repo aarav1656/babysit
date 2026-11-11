@@ -30,6 +30,16 @@ In Hermes Desktop the same watches live in a pane, a full page (`/babysit`) and 
 
 With a `pid`, every 4 seconds Babysit reads the process's resident memory through psutil and charts it. The limit is the cgroup `memory.max` where Linux sets one, and on macOS and other hosts the process's own memory plus what the machine has available. At 90% of the limit the agent is woken with a `memory-pressure` event, once per climb. When the process disappears, the wake says how it ended: `exited with code 1`, or `killed (SIGKILL, likely OOM)` for a kill signal. A job that Hermes started reports its exit code or signal; for a process owned by something else the operating system keeps no status, so the wake reports the last memory sample, and a traceback in the log marks it as crashed.
 
+## On failure: pause
+
+Set `on_failure: "pause"` and pass the job `pid` to freeze it on the first non-finite metric, OOM, memory pressure or traceback. Pause mode requires a live process owned by the Hermes uid and is unavailable on platforms without `SIGSTOP` and `SIGCONT`. Before each signal Babysit checks the PID, process start time, uid and liveness again. It sends `SIGSTOP` only to that one PID. The process holds its memory while paused. Resume it with `babysit_resume` or `/babysit resume <watch_id>`. Resume checks the same identity and sends `SIGCONT`; signal failures are errors. A watch can pause three times, and a recovery lineage has at most five attempts. `resume_of` links a new attempt to an earlier watch in this session. A recovered verdict appears after the new attempt passes the prior failure step without a non-finite metric. If the prior watch has no parsed step, no verdict is possible. Optional `checkpoint_dir` reports the newest supported checkpoint's name, size, age and parsed step without reading its contents.
+
+## Disclosure
+
+The only process control is `SIGSTOP` and `SIGCONT` to the one PID supplied, only with `on_failure: "pause"`, and only after checking the same uid and process start time. Babysit never sends `SIGKILL` or `SIGTERM`, never signals a process group, and never signals another PID. It refuses to pause Hermes' own process or any of its parents.
+
+`examples/train_demo.py` is a demo job. It prints a divergent run with `--lr 0.02` and a recovered run with `--lr 0.001`; its checkpoint files are fixtures.
+
 ## Why
 
 Hermes core `watch_patterns` are for rare signals. It delivers at most one matching notification every 15 seconds. Three consecutive rate-limit windows disable pattern watching. A lifetime cap of 8 delivered matches also disables it and switches the process to completion notification. Babysit watches a log directly and can use progress, stall, and alert patterns while the job runs, with its own wake budget so a noisy log never becomes a stream of agent turns.
@@ -38,7 +48,7 @@ Hermes core `watch_patterns` are for rare signals. It delivers at most one match
 
 Babysit opens an existing log file once and reads up to 1 MiB of complete lines every 2 seconds through that open handle. A watch starts at the end of the file, so a reused log with an old NaN, a configuration echo such as `max_grad_norm: inf`, or the traceback of an earlier run never fires an event. Pass `from_start: true` for a log that already holds the run you care about. It tracks progress lines and updates its original chat message at most once every 5 seconds, when the log has grown or an event fired. An event seen inside that window is shown at the next one, including the last event of a watch that ends on its own. Where each edit would add a new line instead of replacing one (the classic CLI), only event messages are edited in.
 
-A non-finite value is a metric value: `loss=nan`, `val_loss: inf`, `grad_norm: -inf`, or a bare `nan` in a line of numbers. Settings such as `max_grad_norm: inf` or `clip: inf` are not metrics and never fire. Non-finite values, out-of-memory errors, tracebacks, alert patterns and stalls all repeat: each kind wakes the agent at most once every 15 seconds, a watch wakes it at most 20 times, and the next wake carries a count of the events folded into it. A handled traceback early in a run leaves the later crash alert intact. A stall fires after the configured quiet period once the log has produced output, and fires again after more output arrives. If you supply a PID, Babysit wakes the agent when that process exits, becomes a zombie, or its PID is taken by another process, with the log's last line. It checks the process through psutil, a Hermes core dependency, and sends it no signal.
+A non-finite value is a metric value: `loss=nan`, `val_loss: inf`, `grad_norm: -inf`, or a bare `nan` in a line of numbers. Settings such as `max_grad_norm: inf` or `clip: inf` are not metrics and never fire. Non-finite values, out-of-memory errors, tracebacks, alert patterns and stalls all repeat: each kind wakes the agent at most once every 15 seconds, a watch wakes it at most 20 times, and the next wake carries a count of the events folded into it. A handled traceback early in a run leaves the later crash alert intact. A stall fires after the configured quiet period once the log has produced output, and fires again after more output arrives. If you supply a PID, Babysit wakes the agent when that process exits, becomes a zombie, or its PID is taken by another process, with the log's last line. It checks the process through psutil, a Hermes core dependency, and sends it no signal unless `on_failure: "pause"` is selected.
 
 Alert and progress patterns are plain text matched as substrings, the same way core `watch_patterns` works, so a pattern can never make a log line expensive to scan. The built-in detectors scan each line in linear time.
 
@@ -50,10 +60,11 @@ Each watch runs in a daemon thread and ends when you stop it, when its session i
 
 ## Tools and command
 
-- `babysit_watch` starts a watch. It requires `log_path`, the absolute path to an existing regular file. Optional parameters are `from_start` (boolean, default false: read the existing content of the log too), `pid` (positive integer or null), `progress_pattern` (text that marks a progress line, or null for the built-in step, epoch, iter and percent detector), `stall_minutes` (number, default 10), and `alert_patterns` (array of non-empty text strings, case-sensitive, default empty). The result carries the `watch_id` and whether the in-place status message is live.
+- `babysit_watch` starts a watch. It requires `log_path`, the absolute path to an existing regular file. Optional parameters are `from_start` (boolean, default false: read the existing content of the log too), `pid` (positive integer or null), `progress_pattern` (text that marks a progress line, or null for the built-in step, epoch, iter and percent detector), `stall_minutes` (number, default 10), and `alert_patterns` (array of non-empty text strings, case-sensitive, default empty), `on_failure` (`wake` by default or `pause`), `resume_of`, and `checkpoint_dir`. The result carries the `watch_id` and whether the in-place status message is live.
 - `babysit_list` returns the current session's active watches with their IDs, file names, PIDs, line counts, last lines, and the last delivery problem if there was one.
 - `babysit_stop` takes a required `watch_id` and stops that watch if the current session started it.
-- `/babysit` prints one line per active watch in the session that typed it: ID, file, PID, line count and last line, plus any delivery problem.
+- `babysit_resume` takes a required `watch_id` and resumes a paused process after checking identity.
+- `/babysit` prints active watches and pause or lineage state. `/babysit resume <watch_id>` resumes a paused process in the current session.
 
 ## Setup
 

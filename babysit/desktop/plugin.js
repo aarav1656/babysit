@@ -134,6 +134,11 @@ const CSS = `
 .bs-state{color:var(--bs-tone);font-weight:560;font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
 .bs-banner{display:flex;gap:10px;align-items:flex-start;margin:12px 18px 0;padding:9px 12px;border-radius:10px;border:1px solid color-mix(in srgb,var(--bs-tone) 40%,transparent);background:color-mix(in srgb,var(--bs-tone) 11%,transparent);animation:bs-rise .45s cubic-bezier(.2,.8,.2,1)}
 .bs-banner b{color:var(--bs-tone);font-weight:620}
+.bs-paused{--bs-tone:var(--ui-yellow);font-size:14px;font-weight:620}
+.bs-lineage{display:flex;gap:6px;flex-wrap:wrap;padding:8px 18px 0}
+.bs-lineage span{padding:3px 8px;border-radius:8px;background:color-mix(in srgb,var(--ui-red) 10%,transparent);color:var(--ui-red);font-size:11px}
+.bs-lineage span[data-verdict=recovered]{background:color-mix(in srgb,var(--ui-green) 12%,transparent);color:var(--ui-green)}
+.bs-lineage span[data-verdict=relapsed]{background:color-mix(in srgb,var(--ui-red) 12%,transparent);color:var(--ui-red)}
 .bs-banner code{font-family:var(--font-mono,ui-monospace,Menlo,monospace);font-size:11.5px;color:var(--ui-text-secondary);word-break:break-word}
 @keyframes bs-rise{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
 .bs-body{display:grid;grid-template-columns:200px minmax(0,1fr) 272px;gap:22px;padding:16px 18px 6px;align-items:start}
@@ -294,7 +299,8 @@ function Chart({ watch }) {
   }
   const raw = points.map(p => p[2])
   const shown = smooth ? ema(raw, 0.22) : raw
-  const eventXs = watch.events.map(e => e.x)
+  const priorFailure = watch.lineage && watch.lineage.length > 1 ? watch.lineage[watch.lineage.length - 2].failure_step : null
+  const eventXs = watch.events.map(e => e.x).concat(priorFailure === null ? [] : [priorFailure])
   const x0 = Math.min(points[0][0], ...eventXs)
   const x1 = Math.max(points[points.length - 1][0], ...eventXs, x0 + 1)
   let lo = Math.min(...raw, ...shown)
@@ -337,6 +343,10 @@ function Chart({ watch }) {
         zone ? h('g', null,
           h('rect', { className: 'bs-zone', x: sx(zone.x), y: m.t, width: Math.max(0, m.l + iw - sx(zone.x)), height: ih }),
           sx(zone.x) < m.l + iw - 110 ? h('text', { className: 'bs-zonelabel', x: sx(zone.x) + 10, y: m.t + 16 }, 'NON-FINITE') : null) : null,
+        watch.lineage && watch.lineage.length > 1 && watch.lineage[watch.lineage.length - 2].failure_step !== null
+          ? h('g', { className: 'bs-mk', 'data-kind': 'nan' },
+            h('line', { x1: sx(watch.lineage[watch.lineage.length - 2].failure_step), x2: sx(watch.lineage[watch.lineage.length - 2].failure_step), y1: m.t, y2: m.t + ih }),
+            h('text', { x: sx(watch.lineage[watch.lineage.length - 2].failure_step), y: m.t - 4 }, `attempt ${watch.lineage.length - 1} failed here`)) : null,
         h('path', { className: 'bs-area', d: area, fill: `url(#${gradId})` }),
         smooth ? h('path', { className: 'bs-raw', d: line(raw) }) : null,
         h('path', { className: 'bs-line', d: path }),
@@ -413,8 +423,14 @@ function WatchCard({ watch }) {
       h('span', { className: 'bs-name' }, watch.name),
       h('span', { className: 'bs-path', title: watch.path }, watch.pid ? `${watch.path}  ·  pid ${watch.pid}` : watch.path),
       h('span', { className: 'bs-state' },
-        watch.state === 'running' ? `watching ${fmtDuration(watch.uptime)}` : watch.state === 'lost' ? 'watcher lost' + age : watch.state)),
-    lead && (tone === 'alarm' || tone === 'warn')
+        watch.paused ? 'paused' : watch.state === 'running' ? `watching ${fmtDuration(watch.uptime)}` : watch.state === 'lost' ? 'watcher lost' + age : watch.state)),
+    watch.paused ? h('div', { className: 'bs-banner bs-paused', role: 'status' },
+      `PAUSED BY BABYSIT at step ${watch.paused_step}: ${watch.paused_reason}. GPU idle, memory held. Frozen for ${fmtDuration((Date.now()/1000)-watch.paused_at)}. Resume with babysit_resume or /babysit resume ${watch.watch_id}.`) : null,
+    watch.lineage && watch.lineage.length > 1 ? h('div', { className: 'bs-lineage' }, watch.lineage.map((a, i) =>
+      h('span', { key: `${a.watch_id}-${i}`, 'data-verdict': a.verdict || (i === watch.lineage.length - 1 && watch.verdict ? watch.verdict.kind : '') },
+        a.verdict === 'recovered' ? `#${a.attempt || i + 1} passed ${watch.verdict ? watch.verdict.failure_step : a.failure_step} → RECOVERED`
+          : `#${a.attempt || i + 1} ${a.failure_kind || 'running'}${a.failure_step !== null ? ` @ step ${a.failure_step}` : ''}${a.verdict === 'relapsed' ? ' → RELAPSED' : ''}`))) : null,
+    !watch.paused && lead && (tone === 'alarm' || tone === 'warn')
       ? h('div', { className: 'bs-banner', role: 'status' }, h('div', null,
         h('b', null, KIND_LABEL[lead.kind] || lead.kind), lead.count > 1 ? ` ×${lead.count}` : '',
         ` at ${watch.step !== null ? 'step' : 'line'} ${lead.x}, ${clock(lead.t)} in. `,

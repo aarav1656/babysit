@@ -95,6 +95,16 @@ def _watch(raw: object, now: float) -> dict | None:
         "wake_delivery": "chat" if raw.get("wake_delivery") == "chat" else "agent",
         "wake_note": _text(raw.get("wake_note"), 400) or None, "detail": _text(raw.get("detail"), 300) or None,
         "mem": _mem(raw.get("mem")),
+        "paused": raw.get("paused") is True, "paused_at": _num(raw.get("paused_at")),
+        "paused_reason": _text(raw.get("paused_reason"), 40) or None,
+        "paused_step": _num(raw.get("paused_step")), "on_failure": "pause" if raw.get("on_failure") == "pause" else "wake",
+        "lineage": [{"attempt": _num(a.get("attempt")), "watch_id": _text(a.get("watch_id"), 12),
+                     "name": _text(a.get("name"), 120), "failure_kind": _text(a.get("failure_kind"), 40) or None,
+                     "failure_step": _num(a.get("failure_step")), "verdict": a.get("verdict") if a.get("verdict") in (None, "recovered", "relapsed") else None}
+                    for a in (raw.get("lineage") if isinstance(raw.get("lineage"), list) else [])[:5] if isinstance(a, dict)],
+        "verdict": ({"kind": raw["verdict"]["kind"], "attempt": _num(raw["verdict"].get("attempt")),
+                     "step": _num(raw["verdict"].get("step")), "failure_step": _num(raw["verdict"].get("failure_step"))}
+                    if isinstance(raw.get("verdict"), dict) and raw["verdict"].get("kind") in {"recovered", "relapsed"} else None),
     }
 
 

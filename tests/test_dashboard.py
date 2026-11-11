@@ -87,6 +87,19 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(watch["stall_seconds"], 600)
         self.assertEqual(watch["wake_delivery"], "agent")
 
+    def test_publishes_pause_and_lineage_fields(self):
+        self.publish(paused_at=time.time() - 12, paused_reason="nan", paused_step=60, on_failure="pause",
+                     lineage=[{"attempt": 1, "watch_id": "aaaaaaaaaaaa", "name": "train.log",
+                               "failure_kind": "nan", "failure_step": 60, "verdict": None},
+                              {"attempt": 2, "watch_id": "bbbbbbbbbbbb", "name": "train.log",
+                               "failure_kind": None, "failure_step": None, "verdict": "recovered"}],
+                     verdict={"kind": "recovered", "attempt": 2, "step": 61, "failure_step": 60})
+        (watch,) = self.get()
+        self.assertEqual((watch["paused"], watch["paused_reason"], watch["paused_step"], watch["on_failure"]),
+                         (True, "nan", 60, "pause"))
+        self.assertEqual(watch["lineage"][1]["verdict"], "recovered")
+        self.assertEqual(watch["verdict"]["kind"], "recovered")
+
     def test_the_snapshot_file_is_owner_only_and_the_folder_is_not_world_readable(self):
         path = self.publish()
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)

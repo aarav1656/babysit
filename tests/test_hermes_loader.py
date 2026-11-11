@@ -22,10 +22,10 @@ SCRIPT = textwrap.dedent("""
 
     discover_plugins(force=True)
     log = Path(sys.argv[1])
-    out = {"registered": sorted(n for n in ("babysit_watch", "babysit_list", "babysit_stop")
+    out = {"registered": sorted(n for n in ("babysit_watch", "babysit_list", "babysit_stop", "babysit_resume")
                                 if registry.get_entry(n) is not None)}
     out["definitions"] = {d["function"]["name"]: d["function"] for d in registry.get_definitions(
-        {"babysit_watch", "babysit_list", "babysit_stop"})}
+        {"babysit_watch", "babysit_list", "babysit_stop", "babysit_resume"})}
     out["unbound"] = json.loads(registry.dispatch("babysit_watch", {"log_path": str(log)}))
 
     def call(name, args):
@@ -78,13 +78,14 @@ class HermesLoaderTests(unittest.TestCase):
             self.assertTrue(lines, run.stdout[-2000:] + run.stderr[-2000:])
             out = json.loads(lines[-1][len("RESULT "):])
 
-        self.assertEqual(out["registered"], ["babysit_list", "babysit_stop", "babysit_watch"])
+        self.assertEqual(out["registered"], ["babysit_list", "babysit_resume", "babysit_stop", "babysit_watch"])
         # What the model is sent: parameters the model can read, not a bare JSON schema.
         watch_def = out["definitions"]["babysit_watch"]
         self.assertTrue(watch_def["description"])
         self.assertEqual(watch_def["parameters"]["required"], ["log_path"])
         self.assertEqual(sorted(watch_def["parameters"]["properties"]),
-                         ["alert_patterns", "from_start", "log_path", "pid", "progress_pattern", "stall_minutes"])
+                         ["alert_patterns", "checkpoint_dir", "from_start", "log_path", "on_failure", "pid",
+                          "progress_pattern", "resume_of", "stall_minutes"])
         self.assertEqual(out["definitions"]["babysit_stop"]["parameters"]["required"], ["watch_id"])
         self.assertEqual(out["definitions"]["babysit_list"]["parameters"]["type"], "object")
         self.assertFalse(out["unbound"]["ok"])
